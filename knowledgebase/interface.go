@@ -14,9 +14,9 @@
 
 package knowledgebase
 
-type KnowledgeBackend interface {
+type KnowledgeBase interface {
 	Index() string
-	Search(query string, opts ...map[string]any) ([]KnowledgeEntry, error)
+	Search(query string) ([]KnowledgeEntry, error)
 	AddFromText(text []string, opts ...map[string]any) error
 	AddFromFiles(files []string, opts ...map[string]any) error
 	AddFromDirectory(directory string, opts ...map[string]any) error

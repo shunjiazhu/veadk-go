@@ -22,6 +22,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/volcengine/veadk-go/auth/veauth"
+	"github.com/volcengine/veadk-go/common"
+	"github.com/volcengine/veadk-go/configs"
 	"github.com/volcengine/veadk-go/integrations/ve_tos"
 	"github.com/volcengine/veadk-go/integrations/ve_viking_knowledge"
 	"github.com/volcengine/veadk-go/log"
@@ -31,7 +34,6 @@ import (
 const (
 	VikingKnowledgeBaseIndexNotExistCode = 1000005
 	VikingKnowledgeBaseSuccessCode       = 0
-	TosBucketPath                        = "knowledgebase"
 	DefaultTopK                          = 5
 	DefaultChunkDiffusionCount           = 1
 )
@@ -43,7 +45,7 @@ var VikingKnowledgeBaseAddDocsErr = errors.New("VikingKnowledgeBase add docs err
 type Config struct {
 	AK                  string
 	SK                  string
-	SessionToken        string
+	sessionToken        string
 	Index               string
 	Project             string
 	Region              string
@@ -51,24 +53,40 @@ type Config struct {
 	TopK                int32
 	ChunkDiffusionCount int32
 	TOSRegion           string
-	TOSBucket           string
 	TOSEndpoint         string
+	TOSBucket           string
 }
 
 type VikingKnowledgeBackend struct {
 	viking *ve_viking_knowledge.Client
 	tos    *ve_tos.Client
 	config *Config
+	index  string
 }
 
-func NewVikingKnowledgeBackend(cfg *Config) (KnowledgeBackend, error) {
+func NewVikingKnowledgeBackend(cfg *Config) (KnowledgeBase, error) {
+	if cfg.AK == "" {
+		cfg.AK = utils.GetEnvWithDefault(common.VOLCENGINE_ACCESS_KEY, configs.GetGlobalConfig().Volcengine.AK)
+	}
+	if cfg.SK == "" {
+		cfg.SK = utils.GetEnvWithDefault(common.VOLCENGINE_SECRET_KEY, configs.GetGlobalConfig().Volcengine.SK)
+	}
+	if cfg.AK == "" || cfg.SK == "" {
+		iam, err := veauth.GetCredentialFromVeFaaSIAM()
+		if err != nil {
+			return nil, fmt.Errorf("%w : GetCredential error: %w", NewVikingKnowledgeBaseErr, err)
+		}
+		cfg.AK = iam.AccessKeyID
+		cfg.SK = iam.SecretAccessKey
+		cfg.sessionToken = iam.SessionToken
+	}
 	client, err := ve_viking_knowledge.New(&ve_viking_knowledge.Client{
 		Index:        cfg.Index,
 		Project:      cfg.Project,
 		Region:       cfg.Region,
 		AK:           cfg.AK,
 		SK:           cfg.SK,
-		SessionToken: cfg.SessionToken,
+		SessionToken: cfg.sessionToken,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w : %w", NewVikingKnowledgeBaseErr, err)
@@ -98,14 +116,12 @@ func NewVikingKnowledgeBackend(cfg *Config) (KnowledgeBackend, error) {
 		cfg.ChunkDiffusionCount = DefaultChunkDiffusionCount
 	}
 
-	// new tos client
+	// tos
 	tosClient, err := ve_tos.New(&ve_tos.Config{
-		AK:           cfg.AK,
-		SK:           cfg.SK,
-		SessionToken: cfg.SessionToken,
-		Region:       cfg.TOSRegion,
-		Endpoint:     cfg.TOSEndpoint,
-		Bucket:       cfg.TOSBucket,
+		AK:       cfg.AK,
+		SK:       cfg.SK,
+		Region:   cfg.TOSRegion,
+		Endpoint: cfg.TOSEndpoint,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w : new tos client error: %w", NewVikingKnowledgeBaseErr, err)
@@ -114,17 +130,13 @@ func NewVikingKnowledgeBackend(cfg *Config) (KnowledgeBackend, error) {
 		viking: client,
 		tos:    tosClient,
 		config: cfg,
+		index:  cfg.Index,
 	}, nil
 }
 
-func (v *VikingKnowledgeBackend) Search(query string, opts ...map[string]any) ([]KnowledgeEntry, error) {
+func (v *VikingKnowledgeBackend) Search(query string) ([]KnowledgeEntry, error) {
 	chunks, err := v.viking.SearchKnowledge(
-		query,
-		utils.ExtractOptsValueWithDefault[int32]("topK", v.config.TopK, opts...),
-		utils.ExtractOptsValueWithDefault[int32]("chunkDiffusionCount", v.config.ChunkDiffusionCount, opts...),
-		nil,
-		true,
-	)
+		query, v.config.TopK, nil, true, v.config.ChunkDiffusionCount)
 	if err != nil {
 		return nil, fmt.Errorf("%w : %w", VikingKnowledgeBaseSearchErr, err)
 	}
@@ -152,15 +164,17 @@ func (v *VikingKnowledgeBackend) Search(query string, opts ...map[string]any) ([
 }
 
 func (v *VikingKnowledgeBackend) Index() string {
-	return v.config.Index
+	return v.index
 }
 
 func (v *VikingKnowledgeBackend) AddFromText(text []string, opts ...map[string]any) error {
 	for _, t := range text {
-		objectKey := v.tos.BuildObjectKeyForText(TosBucketPath)
-		err := v.tos.UploadText(t, objectKey, nil)
-		if err != nil {
-			return fmt.Errorf("%w :UploadText error: %w", VikingKnowledgeBaseAddDocsErr, err)
+		objectKey := v.tos.BuildObjectKeyForText()
+		err := v.tos.UploadText(t, v.config.TOSBucket, objectKey, nil)
+		{
+			if err != nil {
+				return fmt.Errorf("%w :UploadText error: %w", VikingKnowledgeBaseAddDocsErr, err)
+			}
 		}
 		tosUrl := v.tos.BuildTOSURL(objectKey)
 		_, err = v.viking.DocumentAddTOS(tosUrl)
@@ -173,10 +187,12 @@ func (v *VikingKnowledgeBackend) AddFromText(text []string, opts ...map[string]a
 
 func (v *VikingKnowledgeBackend) AddFromFiles(files []string, opts ...map[string]any) error {
 	for _, f := range files {
-		objectKey := v.tos.BuildObjectKeyForFile(f, TosBucketPath)
-		err := v.tos.UploadFile(f, objectKey, nil)
-		if err != nil {
-			return fmt.Errorf("%w :UploadFile error: %w", VikingKnowledgeBaseAddDocsErr, err)
+		objectKey := v.tos.BuildObjectKeyForText()
+		err := v.tos.UploadFile(f, v.config.TOSBucket, objectKey, nil)
+		{
+			if err != nil {
+				return fmt.Errorf("%w :UploadFile error: %w", VikingKnowledgeBaseAddDocsErr, err)
+			}
 		}
 		tosUrl := v.tos.BuildTOSURL(objectKey)
 		_, err = v.viking.DocumentAddTOS(tosUrl)
@@ -192,7 +208,6 @@ func (v *VikingKnowledgeBackend) AddFromDirectory(directory string, opts ...map[
 	if err != nil {
 		return fmt.Errorf("%w : AddFromDirectory error: %w", VikingKnowledgeBaseAddDocsErr, err)
 	}
-	log.Info(fmt.Sprintf("Add from files: %+v", files))
 	return v.AddFromFiles(files, opts...)
 }
 
