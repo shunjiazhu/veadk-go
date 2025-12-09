@@ -34,7 +34,7 @@ type WebSearchResult struct {
 // query: The query to load the knowledgebase for.
 // Returns:
 // A list of knowledge base results.
-func LoadKnowledgeBaseTool(backend knowledgebase.KnowledgeBase) (tool.Tool, error) {
+func LoadKnowledgeBaseTool(backend knowledgebase.KnowledgeBackend) (tool.Tool, error) {
 	handler := func(ctx tool.Context, req *QueryKnowledgeReq) (WebSearchResult, error) {
 		result, err := backend.Search(req.Query)
 		if err != nil {

@@ -39,7 +39,7 @@ type Config struct {
 	ModelProvider string
 	ModelApiBase  string
 	ModelApiKey   string
-	KnowledgeBase knowledgebase.KnowledgeBase
+	KnowledgeBase knowledgebase.KnowledgeBackend
 }
 
 func New(cfg Config) (agent.Agent, error) {

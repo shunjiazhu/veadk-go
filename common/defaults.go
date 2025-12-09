@@ -39,6 +39,10 @@ const (
 const (
 	DEFAULT_DATABASE_VIKING_PROJECT = "default"
 	DEFAULT_DATABASE_VIKING_REGION  = "cn-beijing"
-	DEFAULT_TOPK                    = 5
-	DEFAULT_CHUNK_
+)
+
+// TOS
+const (
+	DEFAULT_DATABASE_TOS_REGION = "cn-beijing"
+	DEFAULT_DATABASE_TOS_BUCKET = "veADK-go"
 )

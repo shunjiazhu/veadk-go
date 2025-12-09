@@ -22,7 +22,10 @@ import (
 	"net/http"
 	"regexp"
 
+	"github.com/go-playground/validator/v10"
+	"github.com/volcengine/veadk-go/auth/veauth"
 	"github.com/volcengine/veadk-go/common"
+	"github.com/volcengine/veadk-go/configs"
 	"github.com/volcengine/veadk-go/integrations/ve_sign"
 	"github.com/volcengine/veadk-go/utils"
 )
@@ -43,42 +46,75 @@ var (
 	ChunkListPath        = "/api/knowledge/point/list"
 )
 
-var VikingKnowledgeConfigErr = errors.New("Viking Knowledge Config Error")
+var VikingKnowledgeConfigErr = errors.New("viking Knowledge Config Error")
 
 // docs: https://www.volcengine.com/docs/84313/1254485?lang=zh#go-%E8%AF%AD%E8%A8%80%E8%B0%83%E7%94%A8%E5%85%A8%E6%B5%81%E7%A8%8B%E7%A4%BA%E4%BE%8B
 
 type Client struct {
-	ResourceID string //ResourceID or Index + Project
-	Index      string
-	Project    string
-	Region     string
-	AK         string
-	SK         string
+	AK           string `validate:"required"`
+	SK           string `validate:"required"`
+	SessionToken string `validate:"omitempty"`
+	ResourceID   string `validate:"omitempty"` //ResourceID or Index + Project
+	Index        string `validate:"omitempty"`
+	Project      string `validate:"required"`
+	Region       string `validate:"required"`
+}
+
+func (c *Client) validate() error {
+	var validate = validator.New()
+	if err := validate.Struct(c); err != nil {
+		for _, err := range err.(validator.ValidationErrors) {
+			return fmt.Errorf("field %s validation failed: %s（rule: %s）", err.Field(), err.Tag(), err.Param())
+		}
+	}
+	if c.ResourceID == "" && (c.Project == "" || c.Index == "") {
+		return fmt.Errorf("%w: knowledge ResourceID or Index and Project is nil", VikingKnowledgeConfigErr)
+	}
+	if err := precheckIndexNaming(c.Index); err != nil {
+		return err
+	}
+	return nil
 }
 
 func New(cfg *Client) (*Client, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("%w : config is nil", VikingKnowledgeConfigErr)
-	}
-	if cfg.Project == "" {
-		cfg.Project = utils.GetEnvWithDefault(common.DATABASE_VIKING_PROJECT, common.DEFAULT_DATABASE_VIKING_PROJECT)
-	}
-	if cfg.ResourceID == "" && (cfg.Project == "" || cfg.Index == "") {
-		return nil, fmt.Errorf("%w : knowledge ResourceID or Index and Project is nil", VikingKnowledgeConfigErr)
-	}
-	if err := precheckIndexNaming(cfg.Index); err != nil {
-		return nil, err
-	}
-	if cfg.Region == "" {
-		cfg.Region = utils.GetEnvWithDefault(common.DATABASE_VIKING_REGION, common.DEFAULT_DATABASE_VIKING_REGION)
-	}
 	if cfg.AK == "" {
-		cfg.AK = utils.GetEnvWithDefault(common.VOLCENGINE_ACCESS_KEY)
+		cfg.AK = utils.GetEnvWithDefault(common.VOLCENGINE_ACCESS_KEY, configs.GetGlobalConfig().Volcengine.AK)
 	}
 	if cfg.SK == "" {
-		cfg.SK = utils.GetEnvWithDefault(common.VOLCENGINE_SECRET_KEY)
+		cfg.SK = utils.GetEnvWithDefault(common.VOLCENGINE_SECRET_KEY, configs.GetGlobalConfig().Volcengine.SK)
+	}
+	if cfg.AK == "" || cfg.SK == "" {
+		iam, err := veauth.GetCredentialFromVeFaaSIAM()
+		if err != nil {
+			return nil, fmt.Errorf("%w : GetCredential error: %w", VikingKnowledgeConfigErr, err)
+		}
+		cfg.AK = iam.AccessKeyID
+		cfg.SK = iam.SecretAccessKey
+		cfg.SessionToken = iam.SessionToken
+	}
+
+	if cfg.Project == "" {
+		cfg.Project = utils.GetEnvWithDefault(common.DATABASE_VIKING_PROJECT, configs.GetGlobalConfig().Database.Viking.Project, common.DEFAULT_DATABASE_VIKING_PROJECT)
+	}
+	if cfg.Region == "" {
+		cfg.Region = utils.GetEnvWithDefault(common.DATABASE_VIKING_REGION, configs.GetGlobalConfig().Database.Viking.Region, common.DEFAULT_DATABASE_VIKING_REGION)
+	}
+
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("%w : %w", VikingKnowledgeConfigErr, err)
 	}
 	return cfg, nil
+}
+
+func (c *Client) buildHeaders() map[string]string {
+	headers := map[string]string{
+		"Content-Type": "application/json",
+		"Accept":       "application/json",
+	}
+	if c.SessionToken != "" {
+		headers["X-Security-Token"] = c.SessionToken
+	}
+	return headers
 }
 
 func (c *Client) generateSearchKnowledgeReqParams(query string, topK int32, metadata map[string]any, rerank bool, chunkDiffusionCount int32) CollectionSearchKnowledgeRequest {
@@ -120,7 +156,7 @@ func (c *Client) buildDocFilterQuery(metadata map[string]any) map[string]any {
 	}
 }
 
-func (c *Client) SearchKnowledge(query string, topK int32, metadata map[string]any, rerank bool, chunkDiffusionCount int32) (*CollectionSearchKnowledgeResponse, error) {
+func (c *Client) SearchKnowledge(query string, topK int32, chunkDiffusionCount int32, metadata map[string]any, rerank bool) (*CollectionSearchKnowledgeResponse, error) {
 	searchKnowledgeReqParams := c.generateSearchKnowledgeReqParams(query, topK, metadata, rerank, chunkDiffusionCount)
 
 	respBody, err := ve_sign.VeRequest{
@@ -131,11 +167,8 @@ func (c *Client) SearchKnowledge(query string, topK int32, metadata map[string]a
 		Path:    SearchKnowledgePath,
 		Service: VikingKnowledgeService,
 		Region:  c.Region,
-		Header: map[string]string{
-			"Content-Type": "application/json",
-			"Accept":       "application/json",
-		},
-		Body: searchKnowledgeReqParams,
+		Header:  c.buildHeaders(),
+		Body:    searchKnowledgeReqParams,
 	}.DoRequest()
 	if err != nil {
 		return nil, err
@@ -157,10 +190,7 @@ func (c *Client) CollectionDelete() (*CommonResponse, error) {
 		Path:    CollectionDeletePath,
 		Service: VikingKnowledgeService,
 		Region:  c.Region,
-		Header: map[string]string{
-			"Content-Type": "application/json",
-			"Accept":       "application/json",
-		},
+		Header:  c.buildHeaders(),
 		Body: CollectionNameProjectRequest{
 			Name:    c.Index,
 			Project: c.Project,
@@ -177,9 +207,12 @@ func (c *Client) CollectionDelete() (*CommonResponse, error) {
 	return resp, nil
 }
 
-func (c *Client) CollectionCreate(description string) (*CommonResponse, error) {
-	if description == "" {
+func (c *Client) CollectionCreate(descriptions ...string) (*CommonResponse, error) {
+	var description string
+	if len(descriptions) == 0 || descriptions[0] == "" {
 		description = "Created by Volcengine Agent Development Kit (VeADK)."
+	} else {
+		description = descriptions[0]
 	}
 	respBody, err := ve_sign.VeRequest{
 		AK:      c.AK,
@@ -189,10 +222,7 @@ func (c *Client) CollectionCreate(description string) (*CommonResponse, error) {
 		Path:    CollectionCreatePath,
 		Service: VikingKnowledgeService,
 		Region:  c.Region,
-		Header: map[string]string{
-			"Content-Type": "application/json",
-			"Accept":       "application/json",
-		},
+		Header:  c.buildHeaders(),
 		Body: CollectionCreateRequest{
 			Name:        c.Index,
 			Project:     c.Project,
@@ -219,10 +249,7 @@ func (c *Client) CollectionInfo() (*CommonResponse, error) {
 		Path:    CollectionInfoPath,
 		Service: VikingKnowledgeService,
 		Region:  c.Region,
-		Header: map[string]string{
-			"Content-Type": "application/json",
-			"Accept":       "application/json",
-		},
+		Header:  c.buildHeaders(),
 		Body: CollectionNameProjectRequest{
 			Name:    c.Index,
 			Project: c.Project,
@@ -248,10 +275,7 @@ func (c *Client) DocumentAddTOS(tosPath string) (*CommonResponse, error) {
 		Path:    DocumentAddPath,
 		Service: VikingKnowledgeService,
 		Region:  c.Region,
-		Header: map[string]string{
-			"Content-Type": "application/json",
-			"Accept":       "application/json",
-		},
+		Header:  c.buildHeaders(),
 		Body: DocumentAddRequest{
 			CollectionName: c.Index,
 			Project:        c.Project,
@@ -279,10 +303,7 @@ func (c *Client) DocumentDelete(docID string) (*CommonResponse, error) {
 		Path:    DocumentDeletePath,
 		Service: VikingKnowledgeService,
 		Region:  c.Region,
-		Header: map[string]string{
-			"Content-Type": "application/json",
-			"Accept":       "application/json",
-		},
+		Header:  c.buildHeaders(),
 		Body: DocumentDeleteRequest{
 			CollectionName: c.Index,
 			Project:        c.Project,
@@ -309,10 +330,7 @@ func (c *Client) DocumentList(offset int32, limit int32) (*DocumentListResponse,
 		Path:    DocumentListPath,
 		Service: VikingKnowledgeService,
 		Region:  c.Region,
-		Header: map[string]string{
-			"Content-Type": "application/json",
-			"Accept":       "application/json",
-		},
+		Header:  c.buildHeaders(),
 		Body: CommonListRequest{
 			CollectionName: c.Index,
 			Project:        c.Project,
@@ -340,10 +358,7 @@ func (c *Client) ChunkList(offset int32, limit int32) (*ChunkListResponse, error
 		Path:    ChunkListPath,
 		Service: VikingKnowledgeService,
 		Region:  c.Region,
-		Header: map[string]string{
-			"Content-Type": "application/json",
-			"Accept":       "application/json",
-		},
+		Header:  c.buildHeaders(),
 		Body: CommonListRequest{
 			CollectionName: c.Index,
 			Project:        c.Project,

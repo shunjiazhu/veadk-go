@@ -22,8 +22,11 @@ func GetEnvWithDefault(envKey string, defaultValue ...string) string {
 	if value != "" {
 		return value
 	}
-	if len(defaultValue) > 0 {
-		value = defaultValue[0]
+	for _, v := range defaultValue {
+		if v != "" {
+			value = v
+			break
+		}
 	}
 	return value
 }

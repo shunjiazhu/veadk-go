@@ -12,19 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package configs
+package knowledgebase
 
 import (
-	"github.com/volcengine/veadk-go/common"
-	"github.com/volcengine/veadk-go/utils"
+	"errors"
+	"fmt"
 )
 
-type VikingKnowledgeBaseConfig struct {
-	Project string `yaml:"project"`
-	Region  string `yaml:"region"`
+var InvalidKnowledgeBackendErr = errors.New("invalid knowledge backend type")
+
+type KnowledgeBase[T any] struct {
+	Name          string
+	Description   string
+	TopK          int
+	AppName       string
+	Index         string
+	Backend       any
+	BackendConfig T
 }
 
-func (v *VikingKnowledgeBaseConfig) MapEnvToConfig() {
-	v.Project = utils.GetEnvWithDefault(common.DATABASE_VIKING_PROJECT)
-	v.Region = utils.GetEnvWithDefault(common.DATABASE_VIKING_REGION)
+func getKnowledgeBackend(backend KnowledgeBackendType) (KnowledgeBackend, error) {
+	switch backend {
+	case VikingBackend:
+		return nil, nil
+	case RedisBackend, LocalBackend, OpensearchBackend:
+		return nil, fmt.Errorf("%w: %s", InvalidKnowledgeBackendErr, string(backend))
+	default:
+		return nil, fmt.Errorf("%w: %s", InvalidKnowledgeBackendErr, string(backend))
+	}
 }

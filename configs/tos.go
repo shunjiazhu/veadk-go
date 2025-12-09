@@ -12,17 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package knowledgebase
+package configs
 
-import "errors"
+import (
+	"github.com/volcengine/veadk-go/common"
+	"github.com/volcengine/veadk-go/utils"
+)
 
-func GetKnowledgeBackend(backend KnowledgeBackendType) (KnowledgeBase, error) {
-	switch backend {
-	case VikingBackend:
-		return nil, nil
-	case RedisBackend, LocalBackend, OpensearchBackend:
-		return nil, errors.New("Unsupported knowledge backend: " + string(backend))
-	default:
-		return nil, errors.New("Invalid knowledge backend: " + string(backend))
-	}
+type TosClientConf struct {
+	Region   string `yaml:"region"`
+	Endpoint string `yaml:"endpoint"`
+	Bucket   string `yaml:"bucket"`
+}
+
+func (v *TosClientConf) MapEnvToConfig() {
+	v.Region = utils.GetEnvWithDefault(common.DATABASE_TOS_REGION, common.DEFAULT_DATABASE_TOS_REGION)
+	v.Endpoint = utils.GetEnvWithDefault(common.DATABASE_TOS_ENDPOINT)
+	v.Bucket = utils.GetEnvWithDefault(common.DATABASE_TOS_BUCKET)
 }

@@ -36,7 +36,7 @@ func main() {
 	cfg := llmagent.Config{
 		ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
 		ModelApiBase: common.DEFAULT_MODEL_AGENT_API_BASE,
-		ModelApiKey:  os.Getenv("MODEL_API_KEY"),
+		ModelApiKey:  os.Getenv(common.MODEL_AGENT_API_KEY),
 	}
 	cfg.Name = "veadk-llmagent"
 	cfg.Instruction = prompts.DEFAULT_INSTRUCTION

@@ -30,6 +30,8 @@ type CommonDatabaseConfig struct {
 type DatabaseConfig struct {
 	ShortTermMemoryBackend string
 	Postgresql             *CommonDatabaseConfig
+	Viking                 *VikingKnowledgeBaseConfig `yaml:"viking"`
+	TOS                    *TosClientConf             `yaml:"tos"`
 }
 
 func (c *DatabaseConfig) MapEnvToConfig() {
@@ -44,4 +46,6 @@ func (c *DatabaseConfig) MapEnvToConfig() {
 		c.Postgresql.DBUrl = getEnv(common.DATABASE_POSTGRESQL_DBURL, "", true)
 		c.Postgresql.GormLogLevel = getEnv(common.DATABASE_POSTGRESQL_GORMLOGLEVEL, common.DEFAULT_GORM_LOG_LEVEL, true)
 	}
+	c.Viking.MapEnvToConfig()
+	c.TOS.MapEnvToConfig()
 }

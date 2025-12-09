@@ -12,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package configs
+package ve_tos
 
-import (
-	"github.com/volcengine/veadk-go/common"
-	"github.com/volcengine/veadk-go/utils"
-)
-
-type VikingKnowledgeBaseConfig struct {
-	Project string `yaml:"project"`
-	Region  string `yaml:"region"`
-}
-
-func (v *VikingKnowledgeBaseConfig) MapEnvToConfig() {
-	v.Project = utils.GetEnvWithDefault(common.DATABASE_VIKING_PROJECT)
-	v.Region = utils.GetEnvWithDefault(common.DATABASE_VIKING_REGION)
+type TOSClient interface {
+	HeadBucket(bucket string) error
+	CreateBucket(bucket string) error
+	//CreateBucket(bucket string, storageClass StorageClassType, acl ACLType) error
+	//PutBucketCORS(bucket string, rules []CORSRule) error
+	//PreSignedURL(method HttpMethodType, bucket, key string, expires int64) (SignedURLOutput, error)
+	//PutObject(bucket, key string, content io.Reader, meta map[string]string) error
+	//PutObjectFromFile(bucket, key, filePath string, meta map[string]string) error
+	//GetObject(bucket, key string) (io.ReadCloser, error)
+	Close() error
 }
