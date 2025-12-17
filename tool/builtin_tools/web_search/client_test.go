@@ -27,6 +27,9 @@ func TestClient_DoRequest(t *testing.T) {
 
 	ak := utils.GetEnvWithDefault(common.VOLCENGINE_ACCESS_KEY, "")
 	sk := utils.GetEnvWithDefault(common.VOLCENGINE_SECRET_KEY, "")
+	if ak == "" || sk == "" {
+		t.Skip()
+	}
 
 	body := map[string]any{
 		"Query":       "How to create a LLMAgent?",

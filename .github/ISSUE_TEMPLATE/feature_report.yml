@@ -1,0 +1,31 @@
+name: Feature Request
+about: Request a new feature in veadk-go
+title: '[Feature] '
+labels: enhancement
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature description
+      description: Please provide a detailed description of the feature you want to add.
+      placeholder: I want to add a feature to about ..., because ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Current version
+      description: The version of veadk-go you are using.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I have checked existing feature requests to avoid duplicates.
+          required: true
+        - label: I am willing to help test the feature if implemented.
+          required: false

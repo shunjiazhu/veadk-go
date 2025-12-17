@@ -1,0 +1,13 @@
+name: Question
+about: Ask a question about veadk-go
+title: '[Question] '
+labels: question
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Question description
+      description: Please provide a detailed description of your question.
+      placeholder: I am confused about how to use the ... module of veadk-go ...
+    validations:
+      required: true
