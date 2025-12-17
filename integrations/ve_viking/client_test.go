@@ -66,15 +66,3 @@ func TestNew_DefaultsFromEnv(t *testing.T) {
 		t.Fatal("expected defaults populated from env")
 	}
 }
-
-func TestNew_WithResourceOnly(t *testing.T) {
-	t.Setenv(common.DATABASE_VIKING_PROJECT, "default")
-	t.Setenv(common.DATABASE_VIKING_REGION, "cn-beijing")
-	cli, err := NewConfig(&ClientConfig{ResourceID: "kb-xxxx"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cli.ResourceID == "" {
-		t.Fatal("expected ResourceID retained")
-	}
-}

@@ -34,6 +34,7 @@ import (
 
 func TestNewVikingDbMemoryBackend(t *testing.T) {
 	mockey.PatchConvey("TestNewVikingDbMemoryBackend", t, func() {
+		mockey.Mock(ve_viking.NewConfig).Return(&ve_viking.ClientConfig{}, nil).Build()
 		mockey.PatchConvey("collection info failed", func() {
 			mockey.Mock((*viking_memory.Client).CollectionInfo).Return(errors.New("collection info failed")).Build()
 			memoryService, err := NewVikingDbMemoryBackend(&VikingDbMemoryConfig{})

@@ -24,11 +24,13 @@ import (
 )
 
 func TestVikingMemoryClient_CollectionCreate(t *testing.T) {
-	client, err := New(&ve_viking.ClientConfig{Index: "test"})
-	assert.Nil(t, err)
-
 	mockey.PatchConvey("TestVikingMemoryClient_CollectionCreate", t, func() {
+		mockey.Mock(ve_viking.NewConfig).Return(&ve_viking.ClientConfig{}, nil).Build()
 		mockey.Mock(ve_sign.VeRequest.DoRequest).Return([]byte(`{"code": 0}`), nil).Build()
+
+		client, err := New(&ve_viking.ClientConfig{Index: "test"})
+		assert.Nil(t, err)
+
 		resp, err := client.CollectionCreate(&CollectionCreateRequest{})
 		assert.Nil(t, err)
 		assert.Equal(t, int(resp.Code), ve_viking.VikingKnowledgeBaseSuccessCode)
@@ -36,22 +38,23 @@ func TestVikingMemoryClient_CollectionCreate(t *testing.T) {
 }
 
 func TestVikingMemoryClient_CollectionInfo(t *testing.T) {
-	client, err := New(&ve_viking.ClientConfig{Index: "test"})
-	assert.Nil(t, err)
-
 	mockey.PatchConvey("TestVikingMemoryClient_CollectionInfo", t, func() {
+		mockey.Mock(ve_viking.NewConfig).Return(&ve_viking.ClientConfig{}, nil).Build()
 		mockey.Mock(ve_sign.VeRequest.DoRequest).Return([]byte(`{"code": 0}`), nil).Build()
-		err := client.CollectionInfo()
+		client, err := New(&ve_viking.ClientConfig{Index: "test"})
+		assert.Nil(t, err)
+		err = client.CollectionInfo()
 		assert.Nil(t, err)
 	})
 }
 
 func TestVikingMemoryClient_CollectionSearchMemory(t *testing.T) {
-	client, err := New(&ve_viking.ClientConfig{Index: "test"})
-	assert.Nil(t, err)
-
 	mockey.PatchConvey("TestVikingMemoryClient_CollectionSearchMemory", t, func() {
+		mockey.Mock(ve_viking.NewConfig).Return(&ve_viking.ClientConfig{}, nil).Build()
 		mockey.Mock(ve_sign.VeRequest.DoRequest).Return([]byte(`{"code": 0, "data": {"result_list": [{"memory_info":{"summary":"test"}}]}}`), nil).Build()
+		client, err := New(&ve_viking.ClientConfig{Index: "test"})
+		assert.Nil(t, err)
+
 		resp, err := client.CollectionSearchMemory(&CollectionSearchMemoryRequest{})
 		assert.Nil(t, err)
 		assert.Equal(t, int(resp.Code), ve_viking.VikingKnowledgeBaseSuccessCode)
@@ -60,11 +63,13 @@ func TestVikingMemoryClient_CollectionSearchMemory(t *testing.T) {
 }
 
 func TestVikingMemoryClient_AddSession(t *testing.T) {
-	client, err := New(&ve_viking.ClientConfig{Index: "test"})
-	assert.Nil(t, err)
-
 	mockey.PatchConvey("TestVikingMemoryClient_AddSession", t, func() {
 		mockey.Mock(ve_sign.VeRequest.DoRequest).Return([]byte(`{"code": 0}`), nil).Build()
+		mockey.Mock(ve_viking.NewConfig).Return(&ve_viking.ClientConfig{}, nil).Build()
+
+		client, err := New(&ve_viking.ClientConfig{Index: "test"})
+		assert.Nil(t, err)
+
 		resp, err := client.AddSession(&AddSessionRequest{})
 		assert.Nil(t, err)
 		assert.Equal(t, int(resp.Code), ve_viking.VikingKnowledgeBaseSuccessCode)
