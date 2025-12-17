@@ -20,49 +20,16 @@ import (
 	"log"
 	"os"
 
-	"github.com/a2aproject/a2a-go/a2asrv"
-	"github.com/google/uuid"
 	veagent "github.com/volcengine/veadk-go/agent/llmagent"
 	"github.com/volcengine/veadk-go/common"
 	"github.com/volcengine/veadk-go/tool/builtin_tools"
 	"google.golang.org/adk/agent"
-	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/artifact"
 	"google.golang.org/adk/cmd/launcher"
 	"google.golang.org/adk/cmd/launcher/full"
-	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 )
-
-func saveReportfunc(ctx agent.CallbackContext, llmResponse *model.LLMResponse, llmResponseError error) (*model.LLMResponse, error) {
-	if llmResponse == nil || llmResponse.Content == nil || llmResponseError != nil {
-		return llmResponse, llmResponseError
-	}
-	for _, part := range llmResponse.Content.Parts {
-		if part.Text == "" {
-			continue
-		}
-		_, err := ctx.Artifacts().Save(ctx, uuid.NewString(), part)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return llmResponse, llmResponseError
-}
-
-// AuthInterceptor sets 'user' name needed for both a2a and webui launchers which sharing the same sessions service.
-type AuthInterceptor struct {
-	a2asrv.PassthroughCallInterceptor
-}
-
-// Before implements a before request callback.
-func (a *AuthInterceptor) Before(ctx context.Context, callCtx *a2asrv.CallContext, req *a2asrv.Request) (context.Context, error) {
-	callCtx.User = &a2asrv.AuthenticatedUser{
-		UserName: "user",
-	}
-	return ctx, nil
-}
 
 func main() {
 	ctx := context.Background()
@@ -74,7 +41,6 @@ func main() {
 	cfg.Name = "image_generate_tool_agent"
 	cfg.Description = "Agent to generate images based on text descriptions or images."
 	cfg.Instruction = "I can generate images based on text descriptions or images."
-	cfg.AfterModelCallbacks = []llmagent.AfterModelCallback{saveReportfunc}
 
 	imageGenerate, err := builtin_tools.NewImageGenerateTool(&builtin_tools.ImageGenerateConfig{
 		ModelName: common.DEFAULT_MODEL_IMAGE_NAME,
