@@ -1,6 +1,6 @@
 module github.com/volcengine/veadk-go
 
-go 1.24.10
+go 1.24.4
 
 require (
 	github.com/bytedance/mockey v1.3.2

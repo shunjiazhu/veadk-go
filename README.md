@@ -12,6 +12,10 @@ For more details, see our [documents](https://volcengine.github.io/veadk-python/
 
 ## Installation
 
+Before you start, make sure you have the following installed:
+- Go 1.24.4 or later
+
+
 ```bash
 go get github.com/volcengine/veadk-go
 ```
