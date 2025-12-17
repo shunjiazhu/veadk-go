@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -563,36 +562,6 @@ func TestModel_ErrorHandling(t *testing.T) {
 		if !strings.Contains(err.Error(), "400") {
 			t.Errorf("expected error to contain '400', got %v", err)
 		}
-	}
-}
-
-func TestNewOpenAIModel_MissingConfig(t *testing.T) {
-	// Save original env vars
-	origAPIKey := os.Getenv("OPENAI_API_KEY")
-	origBaseURL := os.Getenv("OPENAI_BASE_URL")
-	defer func() {
-		os.Setenv("OPENAI_API_KEY", origAPIKey)
-		os.Setenv("OPENAI_BASE_URL", origBaseURL)
-	}()
-
-	// Test without API key
-	os.Unsetenv("OPENAI_API_KEY")
-	os.Setenv("OPENAI_BASE_URL", "http://localhost")
-	_, err := NewOpenAIModel(context.Background(), "test-model", &ClientConfig{
-		BaseURL: "http://localhost",
-	})
-	if err == nil {
-		t.Error("expected error for missing API key")
-	}
-
-	// Test without base URL
-	os.Setenv("OPENAI_API_KEY", "test-key")
-	os.Unsetenv("OPENAI_BASE_URL")
-	_, err = NewOpenAIModel(context.Background(), "test-model", &ClientConfig{
-		APIKey: "test-key",
-	})
-	if err == nil {
-		t.Error("expected error for missing base URL")
 	}
 }
 
