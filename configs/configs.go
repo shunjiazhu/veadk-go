@@ -26,14 +26,15 @@ import (
 )
 
 type VeADKConfig struct {
-	Volcengine  *Volcengine         `yaml:"volcengine"`
-	Model       *ModelConfig        `yaml:"model"`
-	Tool        *BuiltinToolConfigs `yaml:"tools"`
-	PromptPilot *PromptPilotConfig  `yaml:"prompt_pilot"`
-	TlsConfig   *TLSConfig          `yaml:"tls_config"`
-	Veidentity  *VeIdentityConfig   `yaml:"veidentity"`
-	Database    *DatabaseConfig     `yaml:"database"`
-	LOGGING     *Logging            `yaml:"LOGGING"`
+	Volcengine    *Volcengine          `yaml:"volcengine"`
+	Model         *ModelConfig         `yaml:"model"`
+	Tool          *BuiltinToolConfigs  `yaml:"tools"`
+	PromptPilot   *PromptPilotConfig   `yaml:"prompt_pilot"`
+	TlsConfig     *TLSConfig           `yaml:"tls_config"`
+	Veidentity    *VeIdentityConfig    `yaml:"veidentity"`
+	Database      *DatabaseConfig      `yaml:"database"`
+	LOGGING       *Logging             `yaml:"LOGGING"`
+	Observability *ObservabilityConfig `yaml:"observability"`
 }
 
 type EnvConfigMaptoStruct interface {
@@ -80,6 +81,13 @@ func SetupVeADKConfig() error {
 			TOS:        &TosClientConf{},
 			Mem0:       &Mem0Config{},
 		},
+		Observability: &ObservabilityConfig{
+			OpenTelemetry: &OpenTelemetryConfig{
+				ApmPlus:  &ApmPlusConfig{},
+				CozeLoop: &CozeLoopConfig{},
+				TLS:      &TLSExporterConfig{},
+			},
+		},
 	}
 	globalConfig.Model.MapEnvToConfig()
 	globalConfig.Tool.MapEnvToConfig()
@@ -87,6 +95,7 @@ func SetupVeADKConfig() error {
 	globalConfig.LOGGING.MapEnvToConfig()
 	globalConfig.Database.MapEnvToConfig()
 	globalConfig.Volcengine.MapEnvToConfig()
+	globalConfig.Observability.MapEnvToConfig()
 	return nil
 }
 

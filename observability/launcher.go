@@ -20,40 +20,14 @@ import (
 	"iter"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/cmd/launcher"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 )
-
-// TraceRun is a helper to wrap runner.Run calls with an 'invocation' span.
-// This is the root span for any GenAI request.
-func TraceRun(ctx context.Context, userID, sessionID string, msg any, fn func(context.Context) iter.Seq2[*session.Event, error]) iter.Seq2[*session.Event, error] {
-	ctx = WithUserId(ctx, userID)
-	ctx = WithSessionId(ctx, sessionID)
-	tracedCtx, span := StartSpan(ctx, SpanInvocation)
-
-	span.SetAttributes(
-		attribute.String(AttrGenAISystem, ValGenAISystem),
-	)
-
-	if jsonIn, err := json.Marshal(msg); err == nil {
-		span.SetAttributes(attribute.String(AttrGenAIInputValue, string(jsonIn)))
-	}
-
-	return func(yield func(*session.Event, error) bool) {
-		defer span.End()
-		for event, err := range fn(tracedCtx) {
-			if err != nil {
-				span.RecordError(err)
-			}
-			if !yield(event, err) {
-				return
-			}
-		}
-	}
-}
 
 // ObservedLauncher wraps an adk launcher to provide automatic root span and context propagation.
 type ObservedLauncher struct {
@@ -131,4 +105,39 @@ func (c *tracedToolContext) Done() <-chan struct{} {
 
 func (c *tracedToolContext) Err() error {
 	return c.tracedCtx.Err()
+}
+
+// TraceRun is a helper to wrap runner.Run calls with an 'invocation' span.
+// This is the root span for any GenAI request.
+func TraceRun(ctx context.Context, userID, sessionID string, msg any, fn func(context.Context) iter.Seq2[*session.Event, error]) iter.Seq2[*session.Event, error] {
+	ctx = WithUserId(ctx, userID)
+	ctx = WithSessionId(ctx, sessionID)
+	tracedCtx, span := StartSpan(ctx, SpanInvocation)
+
+	// Use centralized attribute setting logic
+	SetCommonAttributes(tracedCtx, span)
+
+	if jsonIn, err := json.Marshal(msg); err == nil {
+		span.SetAttributes(attribute.String(AttrGenAIInputValue, string(jsonIn)))
+	}
+
+	return func(yield func(*session.Event, error) bool) {
+		defer span.End()
+		for event, err := range fn(tracedCtx) {
+			if err != nil {
+				span.RecordError(err)
+			}
+			if !yield(event, err) {
+				return
+			}
+		}
+	}
+}
+
+func StartSpan(ctx context.Context, name string) (context.Context, trace.Span) {
+	tr := otel.Tracer(InstrumentationName)
+	ctx, span := tr.Start(ctx, name)
+
+	// Span is already enriched by VeSpanEnrichmentProcessor via OnStart
+	return ctx, span
 }

@@ -31,13 +31,13 @@ import (
 )
 
 func main() {
-	// 1. Full Zero-Config Setup
-	// Just provide an exporter and a service name.
-	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	stdExporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 	if err != nil {
 		log.Fatalf("Failed to create exporter: %v", err)
 	}
-	observability.Setup(exporter, "veadk-observability-v4-demo")
+
+	observability.RegisterExporter(stdExporter)
+	observability.RegisterGlobalTracer(stdExporter, "my-service")
 
 	ctx := context.Background()
 

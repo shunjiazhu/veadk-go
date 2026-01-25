@@ -14,6 +14,37 @@
 
 package observability
 
+import (
+	"runtime/debug"
+)
+
+//
+// https://volcengine.github.io/veadk-python/observation/span-attributes/
+//
+
+const (
+	InstrumentationName = "github.com/volcengine/veadk-go"
+)
+
+var (
+	Version = getVersion()
+)
+
+func getVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, dep := range info.Deps {
+			if dep.Path == InstrumentationName && dep.Version != "" {
+				return dep.Version
+			}
+		}
+		// If linked as main module or not found in deps
+		if info.Main.Path == InstrumentationName && info.Main.Version != "" {
+			return info.Main.Version
+		}
+	}
+	return "<unknown>"
+}
+
 // Span names
 const (
 	SpanInvocation  = "invocation"
@@ -33,42 +64,68 @@ const (
 const (
 	AttrGenAISystem        = "gen_ai.system"
 	AttrGenAISystemVersion = "gen_ai.system.version"
+	AttrGenAIAgentName     = "gen_ai.agent.name"
+	AttrInstrumentation    = "openinference.instrumentation.veadk"
+	AttrGenAIAppName       = "gen_ai.app.name"
+	AttrGenAIUserId        = "gen_ai.user.id"
+	AttrGenAISessionId     = "gen_ai.session.id"
+	AttrAgentName          = "agent_name" // Alias of 'gen_ai.agent.name' for backward compatibility
+	AttrAgentNameDot       = "agent.name" // Alias of 'gen_ai.agent.name' for backward compatibility
+	AttrAppNameUnderline   = "app_name"   // Alias of gen_ai.app.name for backward compatibility
+	AttrAppNameDot         = "app.name"   // Alias of gen_ai.app.name for backward compatibility
+	AttrUserId             = "user.id"    // Alias of gen_ai.user.id for backward compatibility
+	AttrSessionId          = "session.id" // Alias of gen_ai.session.id for backward compatibility
 
-	AttrGenAIAgentName = "gen_ai.agent.name"
-	AttrAgentName      = "agent_name" // Alias for backward compatibility/platform
+	AttrCozeloopReportSource = "cozeloop.report.source" // always be veadk
+	AttrCozeloopCallType     = "cozeloop.call_type"
 
-	AttrAppName   = "gen_ai.app.name"
-	AttrUserId    = "gen_ai.user.id"
-	AttrSessionId = "gen_ai.session.id"
+	// Environment Variable Keys for Zero-Config Attributes
+	EnvModelProvider = "VEADK_MODEL_PROVIDER"
+	EnvUserId        = "VEADK_USER_ID"
+	EnvSessionId     = "VEADK_SESSION_ID"
+	EnvAppName       = "VEADK_APP_NAME"
+	EnvCallType      = "VEADK_CALL_TYPE"
 
-	AttrCozeloopReportSource = "cozeloop.report.source"
-	ValGenAISystem           = "veadk"
-	ValCozeloopReportSource  = "veadk"
+	// Unknown values
+	ValCozeloopCallType     = "None"  // fixed
+	ValCozeloopReportSource = "veadk" // fixed
+	ValUnknownAgentName     = "<unknown_agent_name>"
+	ValUnknownAppName       = "<unknown_app_name>"
+	ValUnknownUserID        = "<unknown_user_id>"
+	ValUnknownSessionID     = "<unknown_session_id>"
+	ValUnknownModelProvider = "<unknown_model_provider>"
+
+	// Span Kind values
+	ValGenAISpanKindWorkflow = "workflow"
+	ValGenAISpanKindLLM      = "llm"
+	ValGenAISpanKindTool     = "tool"
 )
 
 // LLM attributes
 const (
-	AttrGenAIRequestModel       = "gen_ai.request.model"
-	AttrGenAIRequestType        = "gen_ai.request.type"
-	AttrGenAIRequestMaxTokens   = "gen_ai.request.max_tokens"
-	AttrGenAIRequestTemperature = "gen_ai.request.temperature"
-	AttrGenAIRequestTopP        = "gen_ai.request.top_p"
-	AttrGenAIRequestFunctions   = "gen_ai.request.functions"
-
-	AttrGenAIResponseModel         = "gen_ai.response.model"
-	AttrGenAIResponseId            = "gen_ai.response.id"
-	AttrGenAIResponseFinishReasons = "gen_ai.response.finish_reasons"
-
-	AttrGenAIIsStreaming = "gen_ai.is_streaming"
-
+	AttrGenAIRequestModel                  = "gen_ai.request.model"
+	AttrGenAIRequestType                   = "gen_ai.request.type"
+	AttrGenAIRequestMaxTokens              = "gen_ai.request.max_tokens"
+	AttrGenAIRequestTemperature            = "gen_ai.request.temperature"
+	AttrGenAIRequestTopP                   = "gen_ai.request.top_p"
+	AttrGenAIRequestFunctions              = "gen_ai.request.functions"
+	AttrGenAIResponseModel                 = "gen_ai.response.model"
+	AttrGenAIResponseId                    = "gen_ai.response.id"
+	AttrGenAIResponseStopReason            = "gen_ai.response.stop_reason"
+	AttrGenAIResponseFinishReason          = "gen_ai.response.finish_reason"
+	AttrGenAIResponseFinishReasons         = "gen_ai.response.finish_reasons"
+	AttrGenAIIsStreaming                   = "gen_ai.is_streaming"
+	AttrGenAIPrompt                        = "gen_ai.prompt"
+	AttrGenAICompletion                    = "gen_ai.completion"
 	AttrGenAIUsageInputTokens              = "gen_ai.usage.input_tokens"
 	AttrGenAIUsageOutputTokens             = "gen_ai.usage.output_tokens"
 	AttrGenAIUsageTotalTokens              = "gen_ai.usage.total_tokens"
 	AttrGenAIUsageCacheCreationInputTokens = "gen_ai.usage.cache_creation_input_tokens"
 	AttrGenAIUsageCacheReadInputTokens     = "gen_ai.usage.cache_read_input_tokens"
-
-	AttrGenAIMessages = "gen_ai.messages"
-	AttrGenAIChoice   = "gen_ai.choice"
+	AttrGenAIMessages                      = "gen_ai.messages"
+	AttrGenAIChoice                        = "gen_ai.choice"
+	AttrGenAIResponsePromptTokenCount      = "gen_ai.response.prompt_token_count"
+	AttrGenAIResponseCandidatesTokenCount  = "gen_ai.response.candidates_token_count"
 
 	AttrGenAIInputValue  = "input.value"
 	AttrGenAIOutputValue = "output.value"
@@ -93,7 +150,9 @@ const (
 type contextKey string
 
 const (
-	ContextKeySessionId contextKey = "veadk_session_id"
-	ContextKeyUserId    contextKey = "veadk_user_id"
-	ContextKeyAppName   contextKey = "veadk_app_name"
+	ContextKeySessionId     contextKey = "veadk_session_id"
+	ContextKeyUserId        contextKey = "veadk_user_id"
+	ContextKeyAppName       contextKey = "veadk_app_name"
+	ContextKeyCallType      contextKey = "veadk_call_type"
+	ContextKeyModelProvider contextKey = "veadk_model_provider"
 )

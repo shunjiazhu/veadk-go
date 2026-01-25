@@ -17,36 +17,115 @@ package observability
 import (
 	"context"
 
+	"sync"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
 
 var (
-	meter = otel.Meter(InstrumentationName)
+	// Slices to hold instruments from multiple providers (Global, Local, etc.)
+	instrumentsMu               sync.RWMutex
+	tokenUsageCounters          []metric.Int64Counter
+	operationDurationHistograms []metric.Float64Histogram
+	firstTokenLatencyHistograms []metric.Float64Histogram
 
-	// Metrics
-	tokenUsageCounter, _          = meter.Int64Counter(MetricNameTokenUsage, metric.WithDescription("The number of tokens used in GenAI operations"))
-	operationDurationHistogram, _ = meter.Float64Histogram(MetricNameOperationDuration, metric.WithDescription("GenAI operation duration in seconds"), metric.WithUnit("s"))
-	firstTokenLatencyHistogram, _ = meter.Float64Histogram(MetricNameFirstTokenLatency, metric.WithDescription("Latency to the first token in seconds"), metric.WithUnit("s"))
+	localOnce  sync.Once
+	globalOnce sync.Once
 )
+
+func registerMeter(meter metric.Meter) {
+	instrumentsMu.Lock()
+	defer instrumentsMu.Unlock()
+
+	if c, err := meter.Int64Counter(MetricNameTokenUsage, metric.WithDescription("The number of tokens used in GenAI operations")); err == nil {
+		tokenUsageCounters = append(tokenUsageCounters, c)
+	}
+	if h, err := meter.Float64Histogram(MetricNameOperationDuration, metric.WithDescription("GenAI operation duration in seconds"), metric.WithUnit("s")); err == nil {
+		operationDurationHistograms = append(operationDurationHistograms, h)
+	}
+	if h, err := meter.Float64Histogram(MetricNameFirstTokenLatency, metric.WithDescription("Latency to the first token in seconds"), metric.WithUnit("s")); err == nil {
+		firstTokenLatencyHistograms = append(firstTokenLatencyHistograms, h)
+	}
+}
+
+// RegisterMetrics initializes the metrics system with a local isolated MeterProvider.
+// It does NOT overwrite the global OTel MeterProvider.
+func RegisterMetrics(reader sdkmetric.Reader, serviceName string) {
+	localOnce.Do(func() {
+		res, _ := resource.Merge(
+			resource.Default(),
+			resource.NewWithAttributes(
+				semconv.SchemaURL,
+				semconv.ServiceNameKey.String(serviceName),
+			),
+		)
+
+		mp := sdkmetric.NewMeterProvider(
+			sdkmetric.WithReader(reader),
+			sdkmetric.WithResource(res),
+		)
+		registerMeter(mp.Meter(InstrumentationName))
+	})
+}
+
+// RegisterGlobalMetrics configures the global OpenTelemetry MeterProvider with the provided reader.
+// This is optional and used when you want unrelated OTel measurements to also be exported.
+func RegisterGlobalMetrics(reader sdkmetric.Reader, serviceName string) {
+	globalOnce.Do(func() {
+		res, _ := resource.Merge(
+			resource.Default(),
+			resource.NewWithAttributes(
+				semconv.SchemaURL,
+				semconv.ServiceNameKey.String(serviceName),
+			),
+		)
+
+		mp := sdkmetric.NewMeterProvider(
+			sdkmetric.WithReader(reader),
+			sdkmetric.WithResource(res),
+		)
+		otel.SetMeterProvider(mp)
+		// No need to call registerMeter here, because the global proxy registered in init()
+		registerMeter(otel.GetMeterProvider().Meter(InstrumentationName))
+	})
+}
 
 // RecordTokenUsage records the number of tokens used.
 func RecordTokenUsage(ctx context.Context, input, output int64, attrs ...attribute.KeyValue) {
-	if input > 0 {
-		tokenUsageCounter.Add(ctx, input, metric.WithAttributes(append(attrs, attribute.String("token.direction", "input"))...))
-	}
-	if output > 0 {
-		tokenUsageCounter.Add(ctx, output, metric.WithAttributes(append(attrs, attribute.String("token.direction", "output"))...))
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
+
+	for _, counter := range tokenUsageCounters {
+		if input > 0 {
+			counter.Add(ctx, input, metric.WithAttributes(append(attrs, attribute.String("token.direction", "input"))...))
+		}
+		if output > 0 {
+			counter.Add(ctx, output, metric.WithAttributes(append(attrs, attribute.String("token.direction", "output"))...))
+		}
 	}
 }
 
 // RecordOperationDuration records the duration of an operation.
 func RecordOperationDuration(ctx context.Context, durationSeconds float64, attrs ...attribute.KeyValue) {
-	operationDurationHistogram.Record(ctx, durationSeconds, metric.WithAttributes(attrs...))
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
+
+	for _, histogram := range operationDurationHistograms {
+		histogram.Record(ctx, durationSeconds, metric.WithAttributes(attrs...))
+	}
 }
 
 // RecordFirstTokenLatency records the latency to the first token.
 func RecordFirstTokenLatency(ctx context.Context, latencySeconds float64, attrs ...attribute.KeyValue) {
-	firstTokenLatencyHistogram.Record(ctx, latencySeconds, metric.WithAttributes(attrs...))
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
+
+	for _, histogram := range firstTokenLatencyHistograms {
+		histogram.Record(ctx, latencySeconds, metric.WithAttributes(attrs...))
+	}
 }
