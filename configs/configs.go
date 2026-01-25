@@ -82,11 +82,7 @@ func SetupVeADKConfig() error {
 			Mem0:       &Mem0Config{},
 		},
 		Observability: &ObservabilityConfig{
-			OpenTelemetry: &OpenTelemetryConfig{
-				ApmPlus:  &ApmPlusConfig{},
-				CozeLoop: &CozeLoopConfig{},
-				TLS:      &TLSExporterConfig{},
-			},
+			OpenTelemetry: &OpenTelemetryConfig{},
 		},
 	}
 	globalConfig.Model.MapEnvToConfig()

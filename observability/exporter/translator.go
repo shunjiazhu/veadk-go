@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 //
-// Licensed under the Apache License, Beijing 2.0 (the "License");
+// Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package observability
+package exporter
 
 import (
 	"context"
@@ -81,8 +81,9 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 
 		presentKeys[key] = struct{}{}
 
-		if key == AttrGenAISystem && kv.Value.AsString() == "gcp.vertex.agent" {
-			kv = attribute.String(AttrGenAISystem, ValCozeloopReportSource)
+		// We use a literal "gen_ai.system" to avoid circular dependency with observability constants
+		if key == "gen_ai.system" && kv.Value.AsString() == "gcp.vertex.agent" {
+			kv = attribute.String("gen_ai.system", "veadk")
 		}
 
 		newAttrs = append(newAttrs, kv)
@@ -116,7 +117,7 @@ func (p *translatedSpan) InstrumentationScope() instrumentation.Scope {
 	scope := p.ReadOnlySpan.InstrumentationScope()
 	if scope.Name == "gcp.vertex.agent" || scope.Name == "veadk" {
 		scope.Name = "openinference.instrumentation.veadk"
-		scope.Version = Version
+		// Version detection is handled in the main package to avoid repetition
 	}
 	return scope
 }

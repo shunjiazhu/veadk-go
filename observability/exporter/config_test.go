@@ -35,8 +35,8 @@ func TestToObservabilityConfig(t *testing.T) {
 
 	expConfig, ok := ToObservabilityConfig(cfg)
 	assert.True(t, ok)
-	assert.Equal(t, ExporterAPMPlus, expConfig.ExporterType)
-	assert.Equal(t, "http://apmplus-example.com", expConfig.Endpoint)
+	assert.NotNil(t, expConfig.ApmPlus)
+	assert.Equal(t, "http://apmplus-example.com", expConfig.ApmPlus.Endpoint)
 }
 
 func TestToObservabilityConfig_Priority(t *testing.T) {
@@ -55,6 +55,6 @@ func TestToObservabilityConfig_Priority(t *testing.T) {
 
 	expConfig, ok := ToObservabilityConfig(cfg)
 	assert.True(t, ok)
-	assert.Equal(t, ExporterCozeLoop, expConfig.ExporterType)
-	assert.Equal(t, "coze-endpoint", expConfig.Endpoint)
+	assert.NotNil(t, expConfig.CozeLoop)
+	assert.Equal(t, "coze-endpoint", expConfig.CozeLoop.Endpoint)
 }

@@ -16,44 +16,24 @@ package observability
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/volcengine/veadk-go/configs"
 	"github.com/volcengine/veadk-go/observability/exporter"
+	"google.golang.org/adk/telemetry"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
-	"google.golang.org/adk/telemetry"
 )
 
-// NewExporter creates a span exporter based on the provided configuration and wraps it with TranslatedExporter.
+// NewExporter creates a span exporter based on the provided configuration.
+// It supports simultaneous exporting to multiple platforms (e.g., CozeLoop, APMPlus, TLS).
 func NewExporter(ctx context.Context, cfg exporter.Config) (sdktrace.SpanExporter, error) {
-	var exp sdktrace.SpanExporter
-	var err error
-
-	switch cfg.ExporterType {
-	case exporter.ExporterCozeLoop:
-		exp, err = exporter.NewCozeLoopExporter(ctx, cfg)
-	case exporter.ExporterAPMPlus:
-		exp, err = exporter.NewAPMPlusExporter(ctx, cfg)
-	case exporter.ExporterTLS:
-		exp, err = exporter.NewTLSExporter(ctx, cfg)
-	case exporter.ExporterStdout:
-		exp, err = exporter.NewStdoutExporter()
-	case exporter.ExporterFile:
-		exp, err = exporter.NewFileExporter(ctx, cfg)
-	default:
-		return nil, fmt.Errorf("unsupported exporter type: %s", cfg.ExporterType)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &TranslatedExporter{SpanExporter: exp}, nil
+	return exporter.NewMultiSpanExporter(ctx, cfg)
 }
+
+// Removed multiSpanExporter as it is now in internal exporter package.
 
 func init() {
 	RegisterSpanProcessor(&VeSpanEnrichmentProcessor{})
@@ -66,8 +46,7 @@ func RegisterSpanProcessor(processor sdktrace.SpanProcessor) {
 // RegisterExporter initializes the observability system by registering the exporter to
 // Google ADK's local telemetry. It does NOT overwrite the global OTel TracerProvider.
 func RegisterExporter(exp sdktrace.SpanExporter) {
-	exporter := &TranslatedExporter{SpanExporter: exp}
-	telemetry.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(exporter))
+	telemetry.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(exp))
 }
 
 // Init initializes the observability system using the global configuration.
@@ -111,14 +90,14 @@ func InitWithConfig(ctx context.Context, cfg exporter.Config) error {
 
 	RegisterExporter(exp)
 
-	// Setup metrics if reader can be created
-	if mr, err := exporter.NewMetricReader(ctx, cfg); err == nil {
-		RegisterMetrics(mr, cfg.ServiceName)
+	// Setup metrics if readers can be created
+	if readers, err := exporter.NewMetricReader(ctx, cfg); err == nil {
+		RegisterMetrics(readers, cfg.ServiceName)
 
 		// Optionally setup global tracer/metrics if requested
 		if cfg.EnableGlobalTracer {
 			RegisterGlobalTracer(exp, cfg.ServiceName)
-			RegisterGlobalMetrics(mr, cfg.ServiceName)
+			RegisterGlobalMetrics(readers, cfg.ServiceName)
 		}
 	} else {
 		// Fallback: If metrics setup failed (e.g. unsupported type), ensure at least Global Tracer is set if requested

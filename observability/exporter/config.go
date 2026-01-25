@@ -30,22 +30,14 @@ const (
 )
 
 // Config is a package-agnostic configuration for initializing observability.
-// It is intended to be populated by the caller (e.g., the configs package).
 type Config struct {
-	// ExporterType specifies which platform to use.
+	// ExporterType specifies which platform to use explicitly (like Stdout/File).
 	ExporterType ExporterType
 
-	// Endpoint is the target URL for the OTLP
-	Endpoint string
-
-	// APIKey is the authentication token required by the platform.
-	APIKey string
-
-	// ServiceName is the name identifying the application or workspace.
-	ServiceName string
-
-	// Region is used for volcano-specific services like TLS.
-	Region string
+	// Platform configs (Can be multiple for multi-writing)
+	ApmPlus  *ApmPlusConfig
+	CozeLoop *CozeLoopConfig
+	TLS      *TLSExporterConfig
 
 	// FilePath is the target file path for ExporterFile.
 	FilePath string
@@ -53,51 +45,83 @@ type Config struct {
 	// EnableGlobalTracer determines if the exporter should also be registered
 	// to the global OpenTelemetry TracerProvider.
 	EnableGlobalTracer bool
+
+	// ServiceName is the primary service name used for the tracer and resource.
+	ServiceName string
+}
+
+type ApmPlusConfig struct {
+	Endpoint    string
+	APIKey      string
+	ServiceName string
+}
+
+type CozeLoopConfig struct {
+	Endpoint    string
+	APIKey      string
+	ServiceName string
+}
+
+type TLSExporterConfig struct {
+	Endpoint    string
+	APIKey      string
+	ServiceName string
+	Region      string
 }
 
 // ToObservabilityConfig converts the user-facing configuration to the package-agnostic struct.
-// It returns an Config and a boolean indicating if a valid config was found.
+// Now it supports gathering all valid platform configs for simultaneous exporting.
 func ToObservabilityConfig(c *configs.ObservabilityConfig) (Config, bool) {
 	if c.OpenTelemetry == nil {
 		return Config{}, false
 	}
 	ot := c.OpenTelemetry
 
-	// Priority: CozeLoop > APMPlus > TLS
+	cfg := Config{
+		EnableGlobalTracer: ot.EnableGlobalTracer,
+	}
+
+	if ot.File != nil && ot.File.Path != "" {
+		cfg.ExporterType = ExporterFile
+		cfg.FilePath = ot.File.Path
+	}
+
+	hasPlatform := false
 	if ot.CozeLoop != nil && (ot.CozeLoop.APIKey != "" || ot.CozeLoop.Endpoint != "") {
-		return Config{
-			ExporterType:       ExporterCozeLoop,
-			Endpoint:           ot.CozeLoop.Endpoint,
-			APIKey:             ot.CozeLoop.APIKey,
-			ServiceName:        ot.CozeLoop.ServiceName,
-			EnableGlobalTracer: ot.EnableGlobalTracer,
-		}, true
+		cfg.CozeLoop = &CozeLoopConfig{
+			Endpoint:    ot.CozeLoop.Endpoint,
+			APIKey:      ot.CozeLoop.APIKey,
+			ServiceName: ot.CozeLoop.ServiceName,
+		}
+		if cfg.ServiceName == "" {
+			cfg.ServiceName = ot.CozeLoop.ServiceName
+		}
+		hasPlatform = true
 	}
 	if ot.ApmPlus != nil && (ot.ApmPlus.APIKey != "" || ot.ApmPlus.Endpoint != "") {
-		return Config{
-			ExporterType:       ExporterAPMPlus,
-			Endpoint:           ot.ApmPlus.Endpoint,
-			APIKey:             ot.ApmPlus.APIKey,
-			ServiceName:        ot.ApmPlus.ServiceName,
-			EnableGlobalTracer: ot.EnableGlobalTracer,
-		}, true
+		cfg.ApmPlus = &ApmPlusConfig{
+			Endpoint:    ot.ApmPlus.Endpoint,
+			APIKey:      ot.ApmPlus.APIKey,
+			ServiceName: ot.ApmPlus.ServiceName,
+		}
+		if cfg.ServiceName == "" {
+			cfg.ServiceName = ot.ApmPlus.ServiceName
+		}
+		hasPlatform = true
 	}
 	if ot.TLS != nil && (ot.TLS.APIKey != "" || ot.TLS.Endpoint != "") {
-		return Config{
-			ExporterType:       ExporterTLS,
-			Endpoint:           ot.TLS.Endpoint,
-			APIKey:             ot.TLS.APIKey,
-			ServiceName:        ot.TLS.ServiceName,
-			Region:             ot.TLS.Region,
-			EnableGlobalTracer: ot.EnableGlobalTracer,
-		}, true
+		cfg.TLS = &TLSExporterConfig{
+			Endpoint:    ot.TLS.Endpoint,
+			APIKey:      ot.TLS.APIKey,
+			ServiceName: ot.TLS.ServiceName,
+			Region:      ot.TLS.Region,
+		}
+		if cfg.ServiceName == "" {
+			cfg.ServiceName = ot.TLS.ServiceName
+		}
+		hasPlatform = true
 	}
-	if ot.File != nil && ot.File.Path != "" {
-		return Config{
-			ExporterType:       ExporterFile,
-			FilePath:           ot.File.Path,
-			EnableGlobalTracer: ot.EnableGlobalTracer,
-		}, true
-	}
-	return Config{}, false
+
+	valid := hasPlatform || cfg.ExporterType != ""
+	return cfg, valid
 }

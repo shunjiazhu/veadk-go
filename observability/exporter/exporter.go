@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 //
-// Licensed under the Apache License, Beijing 2.0 (the "License");
+// Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -36,7 +36,9 @@ import (
 func NewStdoutExporter() (trace.SpanExporter, error) {
 	return stdouttrace.New(stdouttrace.WithPrettyPrint())
 }
-func NewCozeLoopExporter(ctx context.Context, cfg Config) (trace.SpanExporter, error) {
+
+// NewCozeLoopExporter creates an OTLP HTTP exporter for CozeLoop.
+func NewCozeLoopExporter(ctx context.Context, cfg *CozeLoopConfig) (trace.SpanExporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
 		endpoint = "api.coze.cn" // Default Coze domain
@@ -59,7 +61,7 @@ func NewCozeLoopExporter(ctx context.Context, cfg Config) (trace.SpanExporter, e
 }
 
 // NewAPMPlusExporter creates an OTLP HTTP exporter for APMPlus.
-func NewAPMPlusExporter(ctx context.Context, cfg Config) (trace.SpanExporter, error) {
+func NewAPMPlusExporter(ctx context.Context, cfg *ApmPlusConfig) (trace.SpanExporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
 		endpoint = "apmplus-cn-beijing.volces.com:4317"
@@ -78,7 +80,7 @@ func NewAPMPlusExporter(ctx context.Context, cfg Config) (trace.SpanExporter, er
 }
 
 // NewTLSExporter creates an OTLP HTTP exporter for Volcano TLS.
-func NewTLSExporter(ctx context.Context, cfg Config) (trace.SpanExporter, error) {
+func NewTLSExporter(ctx context.Context, cfg *TLSExporterConfig) (trace.SpanExporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
 		region := cfg.Region
@@ -111,34 +113,119 @@ func NewFileExporter(ctx context.Context, cfg Config) (trace.SpanExporter, error
 	return stdouttrace.New(stdouttrace.WithWriter(f), stdouttrace.WithPrettyPrint())
 }
 
-// NewMetricReader creates a metric reader based on the provided configuration.
-func NewMetricReader(ctx context.Context, cfg Config) (sdkmetric.Reader, error) {
-	var exp sdkmetric.Exporter
-	var err error
+// NewMultiSpanExporter creates a span exporter that can export to multiple platforms simultaneously.
+// It wraps the results in a TranslatedExporter.
+func NewMultiSpanExporter(ctx context.Context, cfg Config) (trace.SpanExporter, error) {
+	var exporters []trace.SpanExporter
 
-	switch cfg.ExporterType {
-	case ExporterStdout:
-		exp, err = stdoutmetric.New(stdoutmetric.WithPrettyPrint())
-	case ExporterFile:
-		return NewFileMetricReader(ctx, cfg) // File Reader needs special handling
-	case ExporterCozeLoop:
-		exp, err = NewCozeLoopMetricExporter(ctx, cfg)
-	case ExporterAPMPlus:
-		exp, err = NewAPMPlusMetricExporter(ctx, cfg)
-	case ExporterTLS:
-		exp, err = NewTLSMetricExporter(ctx, cfg)
-	default:
-		return nil, fmt.Errorf("unsupported exporter type for metrics: %s", cfg.ExporterType)
+	// 1. Explicit Exporter Types (Stdout/File)
+	if cfg.ExporterType == ExporterStdout {
+		exp, err := NewStdoutExporter()
+		if err != nil {
+			return nil, err
+		}
+		exporters = append(exporters, exp)
+	} else if cfg.ExporterType == ExporterFile {
+		exp, err := NewFileExporter(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		exporters = append(exporters, exp)
 	}
 
-	if err != nil {
-		return nil, err
+	// 2. Platform Exporters (Can be multiple)
+	if cfg.CozeLoop != nil && cfg.CozeLoop.APIKey != "" {
+		if exp, err := NewCozeLoopExporter(ctx, cfg.CozeLoop); err == nil {
+			exporters = append(exporters, exp)
+		}
 	}
-	return sdkmetric.NewPeriodicReader(exp), nil
+	if cfg.ApmPlus != nil && cfg.ApmPlus.APIKey != "" {
+		if exp, err := NewAPMPlusExporter(ctx, cfg.ApmPlus); err == nil {
+			exporters = append(exporters, exp)
+		}
+	}
+	if cfg.TLS != nil && cfg.TLS.APIKey != "" {
+		if exp, err := NewTLSExporter(ctx, cfg.TLS); err == nil {
+			exporters = append(exporters, exp)
+		}
+	}
+
+	if len(exporters) == 0 {
+		return nil, fmt.Errorf("no valid exporter configuration found")
+	}
+
+	var finalExp trace.SpanExporter
+	if len(exporters) == 1 {
+		finalExp = exporters[0]
+	} else {
+		finalExp = &multiSpanExporter{exporters: exporters}
+	}
+
+	return &TranslatedExporter{SpanExporter: finalExp}, nil
+}
+
+type multiSpanExporter struct {
+	exporters []trace.SpanExporter
+}
+
+func (m *multiSpanExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
+	for _, e := range m.exporters {
+		if err := e.ExportSpans(ctx, spans); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *multiSpanExporter) Shutdown(ctx context.Context) error {
+	for _, e := range m.exporters {
+		if err := e.Shutdown(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NewMetricReader creates one or more metric readers based on the provided configuration.
+func NewMetricReader(ctx context.Context, cfg Config) ([]sdkmetric.Reader, error) {
+	var readers []sdkmetric.Reader
+
+	// 1. Explicit Types
+	if cfg.ExporterType == ExporterStdout {
+		if exp, err := stdoutmetric.New(stdoutmetric.WithPrettyPrint()); err == nil {
+			readers = append(readers, sdkmetric.NewPeriodicReader(exp))
+		}
+	} else if cfg.ExporterType == ExporterFile {
+		if r, err := NewFileMetricReader(ctx, cfg); err == nil {
+			readers = append(readers, r)
+		}
+	}
+
+	// 2. Platforms
+	if cfg.CozeLoop != nil && cfg.CozeLoop.APIKey != "" {
+		if exp, err := NewCozeLoopMetricExporter(ctx, cfg.CozeLoop); err == nil {
+			readers = append(readers, sdkmetric.NewPeriodicReader(exp))
+		}
+	}
+	if cfg.ApmPlus != nil && cfg.ApmPlus.APIKey != "" {
+		if exp, err := NewAPMPlusMetricExporter(ctx, cfg.ApmPlus); err == nil {
+			readers = append(readers, sdkmetric.NewPeriodicReader(exp))
+		}
+	}
+	if cfg.TLS != nil && cfg.TLS.APIKey != "" {
+		if exp, err := NewTLSMetricExporter(ctx, cfg.TLS); err == nil {
+			readers = append(readers, sdkmetric.NewPeriodicReader(exp))
+		}
+	}
+
+	if len(readers) == 0 {
+		return nil, fmt.Errorf("no valid metric configuration found")
+	}
+	return readers, nil
 }
 
 // NewCozeLoopMetricExporter creates an OTLP Metric exporter for CozeLoop.
-func NewCozeLoopMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, error) {
+func NewCozeLoopMetricExporter(ctx context.Context, cfg *CozeLoopConfig) (sdkmetric.Exporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
 		endpoint = "api.coze.cn"
@@ -159,7 +246,7 @@ func NewCozeLoopMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Expor
 
 // NewAPMPlusMetricExporter creates an OTLP Metric exporter for APMPlus.
 // Supports automatic gRPC (4317) detection.
-func NewAPMPlusMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, error) {
+func NewAPMPlusMetricExporter(ctx context.Context, cfg *ApmPlusConfig) (sdkmetric.Exporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
 		endpoint = "apmplus-cn-beijing.volces.com:4317"
@@ -190,7 +277,7 @@ func NewAPMPlusMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Export
 }
 
 // NewTLSMetricExporter creates an OTLP Metric exporter for Volcano TLS.
-func NewTLSMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, error) {
+func NewTLSMetricExporter(ctx context.Context, cfg *TLSExporterConfig) (sdkmetric.Exporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
 		region := cfg.Region

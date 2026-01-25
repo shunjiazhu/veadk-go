@@ -55,7 +55,10 @@ func registerMeter(meter metric.Meter) {
 
 // RegisterMetrics initializes the metrics system with a local isolated MeterProvider.
 // It does NOT overwrite the global OTel MeterProvider.
-func RegisterMetrics(reader sdkmetric.Reader, serviceName string) {
+func RegisterMetrics(readers []sdkmetric.Reader, serviceName string) {
+	if len(readers) == 0 {
+		return
+	}
 	localOnce.Do(func() {
 		res, _ := resource.Merge(
 			resource.Default(),
@@ -65,17 +68,24 @@ func RegisterMetrics(reader sdkmetric.Reader, serviceName string) {
 			),
 		)
 
-		mp := sdkmetric.NewMeterProvider(
-			sdkmetric.WithReader(reader),
+		options := []sdkmetric.Option{
 			sdkmetric.WithResource(res),
-		)
+		}
+		for _, r := range readers {
+			options = append(options, sdkmetric.WithReader(r))
+		}
+
+		mp := sdkmetric.NewMeterProvider(options...)
 		registerMeter(mp.Meter(InstrumentationName))
 	})
 }
 
-// RegisterGlobalMetrics configures the global OpenTelemetry MeterProvider with the provided reader.
+// RegisterGlobalMetrics configures the global OpenTelemetry MeterProvider with the provided readers.
 // This is optional and used when you want unrelated OTel measurements to also be exported.
-func RegisterGlobalMetrics(reader sdkmetric.Reader, serviceName string) {
+func RegisterGlobalMetrics(readers []sdkmetric.Reader, serviceName string) {
+	if len(readers) == 0 {
+		return
+	}
 	globalOnce.Do(func() {
 		res, _ := resource.Merge(
 			resource.Default(),
@@ -85,10 +95,14 @@ func RegisterGlobalMetrics(reader sdkmetric.Reader, serviceName string) {
 			),
 		)
 
-		mp := sdkmetric.NewMeterProvider(
-			sdkmetric.WithReader(reader),
+		options := []sdkmetric.Option{
 			sdkmetric.WithResource(res),
-		)
+		}
+		for _, r := range readers {
+			options = append(options, sdkmetric.WithReader(r))
+		}
+
+		mp := sdkmetric.NewMeterProvider(options...)
 		otel.SetMeterProvider(mp)
 		// No need to call registerMeter here, because the global proxy registered in init()
 		registerMeter(otel.GetMeterProvider().Meter(InstrumentationName))
