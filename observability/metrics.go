@@ -46,7 +46,7 @@ func RegisterLocalMetrics(readers []sdkmetric.Reader) {
 		}
 
 		mp := sdkmetric.NewMeterProvider(options...)
-		registerMeter(mp.Meter(InstrumentationName))
+		InitializeInstruments(mp.Meter(InstrumentationName))
 	})
 }
 
@@ -62,21 +62,22 @@ func RegisterGlobalMetrics(readers []sdkmetric.Reader) {
 		mp := sdkmetric.NewMeterProvider(options...)
 		otel.SetMeterProvider(mp)
 		// No need to call registerMeter here, because the global proxy registered in init()
-		registerMeter(otel.GetMeterProvider().Meter(InstrumentationName))
+		InitializeInstruments(otel.GetMeterProvider().Meter(InstrumentationName))
 	})
 }
 
-func registerMeter(meter metric.Meter) {
+// InitializeInstruments initializes the metrics instruments for the provided meter.
+func InitializeInstruments(m metric.Meter) {
 	instrumentsMu.Lock()
 	defer instrumentsMu.Unlock()
 
-	if c, err := meter.Int64Counter(MetricNameTokenUsage, metric.WithDescription("The number of tokens used in GenAI operations")); err == nil {
+	if c, err := m.Int64Counter(MetricNameTokenUsage, metric.WithDescription("The number of tokens used in GenAI operations")); err == nil {
 		tokenUsageCounters = append(tokenUsageCounters, c)
 	}
-	if h, err := meter.Float64Histogram(MetricNameOperationDuration, metric.WithDescription("GenAI operation duration in seconds"), metric.WithUnit("s")); err == nil {
+	if h, err := m.Float64Histogram(MetricNameOperationDuration, metric.WithDescription("GenAI operation duration in seconds"), metric.WithUnit("s")); err == nil {
 		operationDurationHistograms = append(operationDurationHistograms, h)
 	}
-	if h, err := meter.Float64Histogram(MetricNameFirstTokenLatency, metric.WithDescription("Latency to the first token in seconds"), metric.WithUnit("s")); err == nil {
+	if h, err := m.Float64Histogram(MetricNameFirstTokenLatency, metric.WithDescription("Latency to the first token in seconds"), metric.WithUnit("s")); err == nil {
 		firstTokenLatencyHistograms = append(firstTokenLatencyHistograms, h)
 	}
 }

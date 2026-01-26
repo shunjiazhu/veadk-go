@@ -41,12 +41,12 @@ var (
 	}
 )
 
-// TranslatedExporter wraps a SpanExporter and remaps ADK attributes to VeADK standard fields.
-type TranslatedExporter struct {
+// ADKTranslatedExporter wraps a SpanExporter and remaps ADK attributes to standard fields.
+type ADKTranslatedExporter struct {
 	trace.SpanExporter
 }
 
-func (e *TranslatedExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
+func (e *ADKTranslatedExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
 	translated := make([]trace.ReadOnlySpan, len(spans))
 	for i, s := range spans {
 		translated[i] = &translatedSpan{ReadOnlySpan: s}

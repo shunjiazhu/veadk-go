@@ -16,6 +16,7 @@ package exporter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"sync"
 
 	"github.com/volcengine/veadk-go/configs"
+	"github.com/volcengine/veadk-go/log"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
@@ -54,13 +56,13 @@ func getFileWriter(path string) io.Writer {
 	return writers.(io.Writer)
 }
 
-// NewStdoutSpanExporter creates a simple stdout exporter with pretty printing.
-func NewStdoutSpanExporter() (trace.SpanExporter, error) {
+// NewStdoutExporter creates a simple stdout exporter with pretty printing.
+func NewStdoutExporter() (trace.SpanExporter, error) {
 	return stdouttrace.New(stdouttrace.WithPrettyPrint())
 }
 
-// NewCozeLoopSpanExporter creates an OTLP HTTP exporter for CozeLoop.
-func NewCozeLoopSpanExporter(ctx context.Context, cfg *configs.CozeLoopConfig) (trace.SpanExporter, error) {
+// NewCozeLoopExporter creates an OTLP HTTP exporter for CozeLoop.
+func NewCozeLoopExporter(ctx context.Context, cfg *configs.CozeLoopConfig) (trace.SpanExporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
 		return nil, fmt.Errorf("CozeLoop exporter endpoint is required")
@@ -102,8 +104,8 @@ func NewAPMPlusExporter(ctx context.Context, cfg *configs.ApmPlusConfig) (trace.
 	return otlptrace.New(ctx, otlptracehttp.NewClient(options...))
 }
 
-// NewTLSSpanExporter creates an OTLP HTTP exporter for Volcano TLS.
-func NewTLSSpanExporter(ctx context.Context, cfg *configs.TLSExporterConfig) (trace.SpanExporter, error) {
+// NewTLSExporter creates an OTLP HTTP exporter for Volcano TLS.
+func NewTLSExporter(ctx context.Context, cfg *configs.TLSExporterConfig) (trace.SpanExporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
 		return nil, fmt.Errorf("TLS exporter endpoint is required")
@@ -126,77 +128,84 @@ func NewTLSSpanExporter(ctx context.Context, cfg *configs.TLSExporterConfig) (tr
 	return otlptrace.New(ctx, otlptracehttp.NewClient(options...))
 }
 
-// NewFileSpanExporter creates a span exporter that writes traces to a file.
-func NewFileSpanExporter(ctx context.Context, cfg *configs.FileConfig) (trace.SpanExporter, error) {
+// NewFileExporter creates a span exporter that writes traces to a file.
+func NewFileExporter(ctx context.Context, cfg *configs.FileConfig) (trace.SpanExporter, error) {
 	f := getFileWriter(cfg.Path)
 	return stdouttrace.New(stdouttrace.WithWriter(f), stdouttrace.WithPrettyPrint())
 }
 
-// NewMultiSpanExporter creates a span exporter that can export to multiple platforms simultaneously.
-// It wraps the results in a TranslatedExporter.
-func NewMultiSpanExporter(ctx context.Context, cfg *configs.OpenTelemetryConfig) (trace.SpanExporter, error) {
+// NewMultiExporter creates a span exporter that can export to multiple platforms simultaneously.
+func NewMultiExporter(ctx context.Context, cfg *configs.OpenTelemetryConfig) (trace.SpanExporter, error) {
 	var exporters []trace.SpanExporter
 
 	// 1. Explicit Exporter Types (Stdout/File)
 	if cfg.Stdout != nil && cfg.Stdout.Enable {
-		if exp, err := NewStdoutSpanExporter(); err == nil {
+		if exp, err := NewStdoutExporter(); err == nil {
 			exporters = append(exporters, exp)
+			log.Info("Exporting spans to Stdout")
 		}
 	}
 
 	if cfg.File != nil && cfg.File.Path != "" {
-		if exp, err := NewFileSpanExporter(ctx, cfg.File); err == nil {
+		if exp, err := NewFileExporter(ctx, cfg.File); err == nil {
 			exporters = append(exporters, exp)
+			log.Info(fmt.Sprintf("Exporting spans to File: %s", cfg.File.Path))
 		}
 	}
 
 	// 2. Platform Exporters (Can be multiple)
 	if cfg.CozeLoop != nil && cfg.CozeLoop.APIKey != "" {
-		if exp, err := NewCozeLoopSpanExporter(ctx, cfg.CozeLoop); err == nil {
+		if exp, err := NewCozeLoopExporter(ctx, cfg.CozeLoop); err == nil {
 			exporters = append(exporters, exp)
+			log.Info("Exporting spans to CozeLoop", "endpoint", cfg.CozeLoop.Endpoint)
 		}
 	}
 	if cfg.ApmPlus != nil && cfg.ApmPlus.APIKey != "" {
 		if exp, err := NewAPMPlusExporter(ctx, cfg.ApmPlus); err == nil {
 			exporters = append(exporters, exp)
+			log.Info("Exporting spans to APMPlus", "endpoint", cfg.ApmPlus.Endpoint)
 		}
 	}
 	if cfg.TLS != nil && cfg.TLS.AccessKey != "" && cfg.TLS.SecretKey != "" {
-		if exp, err := NewTLSSpanExporter(ctx, cfg.TLS); err == nil {
+		if exp, err := NewTLSExporter(ctx, cfg.TLS); err == nil {
 			exporters = append(exporters, exp)
+			log.Info("Exporting spans to TLS", "endpoint", cfg.TLS.Endpoint)
 		}
 	}
 
-	var finalExp trace.SpanExporter
-	if len(exporters) == 1 {
-		finalExp = exporters[0]
-	} else {
-		finalExp = &multiSpanExporter{exporters: exporters}
+	if len(exporters) == 0 {
+		return nil, nil // Or return a Noop exporter?
 	}
 
-	return &TranslatedExporter{SpanExporter: finalExp}, nil
+	if len(exporters) == 1 {
+		return exporters[0], nil
+	}
+
+	return &multiExporter{exporters: exporters}, nil
 }
 
-type multiSpanExporter struct {
+type multiExporter struct {
 	exporters []trace.SpanExporter
 }
 
-func (m *multiSpanExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
+func (m *multiExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
+	var errs []error
 	for _, e := range m.exporters {
 		if err := e.ExportSpans(ctx, spans); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
-func (m *multiSpanExporter) Shutdown(ctx context.Context) error {
+func (m *multiExporter) Shutdown(ctx context.Context) error {
+	var errs []error
 	for _, e := range m.exporters {
 		if err := e.Shutdown(ctx); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // NewMetricReader creates one or more metric readers based on the provided configuration.

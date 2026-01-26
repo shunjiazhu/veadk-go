@@ -26,20 +26,22 @@ import (
 // SetCommonAttributes enriches the span with common attributes from context, config, or env.
 func SetCommonAttributes(ctx context.Context, span trace.Span) {
 	// 1. Fixed attributes
-	span.SetAttributes(attribute.String(AttrCozeloopReportSource, ValCozeloopReportSource))
+	span.SetAttributes(attribute.String(AttrCozeloopReportSource, DefaultCozeLoopReportSource))
 
 	// 2. Dynamic attributes from context/config/env
 	attrs := []struct {
 		key      string
 		val      string
 		fallback string
-		aliases  []string // for compatibility
+		aliases  []string // Platform-specific aliases for compatibility
 	}{
-		{AttrGenAISystem, GetModelProvider(ctx), ValUnknownModelProvider, nil},
-		{AttrCozeloopCallType, GetCallType(ctx), ValCozeloopCallType, nil},
-		{AttrGenAISessionId, GetSessionId(ctx), ValUnknownSessionID, []string{AttrSessionId}},
-		{AttrGenAIUserId, GetUserId(ctx), ValUnknownUserID, []string{AttrUserId}},
-		{AttrGenAIAppName, GetAppName(ctx), ValUnknownAppName, []string{AttrAppNameUnderline, AttrAppNameDot}},
+		{AttrGenAISystem, GetModelProvider(ctx), FallbackModelProvider, nil},
+		{AttrGenAISystemVersion, Version, "", []string{AttrInstrumentation}},
+		{AttrCozeloopCallType, GetCallType(ctx), DefaultCozeLoopCallType, nil},
+		{AttrGenAISessionId, GetSessionId(ctx), FallbackSessionID, []string{AttrSessionId}},
+		{AttrGenAIUserId, GetUserId(ctx), FallbackUserID, []string{AttrUserId}},
+		{AttrGenAIAppName, GetAppName(ctx), FallbackAppName, []string{AttrAppNameUnderline, AttrAppNameDot}},
+		{AttrGenAIInvocationId, GetInvocationId(ctx), "", []string{AttrInvocationId}},
 	}
 
 	for _, attr := range attrs {
@@ -59,7 +61,7 @@ func SetCommonAttributes(ctx context.Context, span trace.Span) {
 // SetLLMAttributes sets standard GenAI attributes for LLM spans.
 func SetLLMAttributes(span trace.Span) {
 	span.SetAttributes(
-		attribute.String(AttrGenAISpanKind, ValGenAISpanKindLLM),
+		attribute.String(AttrGenAISpanKind, SpanKindLLM),
 		attribute.String(AttrGenAIOperationName, "chat"),
 	)
 }
@@ -67,7 +69,7 @@ func SetLLMAttributes(span trace.Span) {
 // SetToolAttributes sets standard GenAI attributes for Tool spans.
 func SetToolAttributes(span trace.Span, name string) {
 	span.SetAttributes(
-		attribute.String(AttrGenAISpanKind, ValGenAISpanKindTool),
+		attribute.String(AttrGenAISpanKind, SpanKindTool),
 		attribute.String(AttrGenAIOperationName, "execute_tool"),
 		attribute.String(AttrGenAIToolName, name),
 	)
@@ -85,7 +87,7 @@ func SetAgentAttributes(span trace.Span, name string) {
 // SetWorkflowAttributes sets standard GenAI attributes for Workflow/Root spans.
 func SetWorkflowAttributes(span trace.Span) {
 	span.SetAttributes(
-		attribute.String(AttrGenAISpanKind, ValGenAISpanKindWorkflow),
+		attribute.String(AttrGenAISpanKind, SpanKindWorkflow),
 		attribute.String(AttrGenAIOperationName, "invocation"),
 	)
 }
@@ -128,6 +130,17 @@ func WithModelProvider(ctx context.Context, p string) context.Context {
 
 func GetModelProvider(ctx context.Context) string {
 	return getContextString(ctx, ContextKeyModelProvider, EnvModelProvider)
+}
+
+func WithInvocationId(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, ContextKeyInvocationId, id)
+}
+
+func GetInvocationId(ctx context.Context) string {
+	if val, ok := ctx.Value(ContextKeyInvocationId).(string); ok && val != "" {
+		return val
+	}
+	return ""
 }
 
 // getContextString retrieves a string value from Context -> Global Config -> Environment Variable.

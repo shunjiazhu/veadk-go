@@ -69,15 +69,17 @@ const (
 	AttrGenAIAppName       = "gen_ai.app.name"
 	AttrGenAIUserId        = "gen_ai.user.id"
 	AttrGenAISessionId     = "gen_ai.session.id"
-	AttrAgentName          = "agent_name" // Alias of 'gen_ai.agent.name' for backward compatibility
-	AttrAgentNameDot       = "agent.name" // Alias of 'gen_ai.agent.name' for backward compatibility
-	AttrAppNameUnderline   = "app_name"   // Alias of gen_ai.app.name for backward compatibility
-	AttrAppNameDot         = "app.name"   // Alias of gen_ai.app.name for backward compatibility
-	AttrUserId             = "user.id"    // Alias of gen_ai.user.id for backward compatibility
-	AttrSessionId          = "session.id" // Alias of gen_ai.session.id for backward compatibility
+	AttrGenAIInvocationId  = "gen_ai.invocation.id"
+	AttrAgentName          = "agent_name"     // Alias of 'gen_ai.agent.name' for CozeLoop platform
+	AttrAgentNameDot       = "agent.name"     // Alias of 'gen_ai.agent.name' for TLS platform
+	AttrAppNameUnderline   = "app_name"       // Alias of gen_ai.app.name for CozeLoop platform
+	AttrAppNameDot         = "app.name"       // Alias of gen_ai.app.name for TLS platform
+	AttrUserId             = "user.id"        // Alias of gen_ai.user.id for CozeLoop/TLS platforms
+	AttrSessionId          = "session.id"     // Alias of gen_ai.session.id for CozeLoop/TLS platforms
+	AttrInvocationId       = "invocation.id" // Alias of gen_ai.invocation.id for CozeLoop platform
 
-	AttrCozeloopReportSource = "cozeloop.report.source" // always be veadk
-	AttrCozeloopCallType     = "cozeloop.call_type"
+	AttrCozeloopReportSource = "cozeloop.report.source" // Fixed value: veadk
+	AttrCozeloopCallType     = "cozeloop.call_type"      // CozeLoop call type
 
 	// Environment Variable Keys for Zero-Config Attributes
 	EnvModelProvider = "VEADK_MODEL_PROVIDER"
@@ -86,19 +88,19 @@ const (
 	EnvAppName       = "VEADK_APP_NAME"
 	EnvCallType      = "VEADK_CALL_TYPE"
 
-	// Unknown values
-	ValCozeloopCallType     = "None"  // fixed
-	ValCozeloopReportSource = "veadk" // fixed
-	ValUnknownAgentName     = "<unknown_agent_name>"
-	ValUnknownAppName       = "<unknown_app_name>"
-	ValUnknownUserID        = "<unknown_user_id>"
-	ValUnknownSessionID     = "<unknown_session_id>"
-	ValUnknownModelProvider = "<unknown_model_provider>"
+	// Default and fallback values
+	DefaultCozeLoopCallType     = "None"  // fixed
+	DefaultCozeLoopReportSource = "veadk" // fixed
+	FallbackAgentName           = "<unknown_agent_name>"
+	FallbackAppName             = "<unknown_app_name>"
+	FallbackUserID              = "<unknown_user_id>"
+	FallbackSessionID           = "<unknown_session_id>"
+	FallbackModelProvider       = "<unknown_model_provider>"
 
-	// Span Kind values
-	ValGenAISpanKindWorkflow = "workflow"
-	ValGenAISpanKindLLM      = "llm"
-	ValGenAISpanKindTool     = "tool"
+	// Span Kind values (GenAI semantic conventions)
+	SpanKindWorkflow = "workflow"
+	SpanKindLLM      = "llm"
+	SpanKindTool     = "tool"
 )
 
 // LLM attributes
@@ -146,13 +148,14 @@ const (
 	AttrGenAIOutput    = "gen_ai.output"
 )
 
-// Context keys
+// Context keys for storing runtime values
 type contextKey string
 
 const (
-	ContextKeySessionId     contextKey = "veadk_session_id"
-	ContextKeyUserId        contextKey = "veadk_user_id"
-	ContextKeyAppName       contextKey = "veadk_app_name"
-	ContextKeyCallType      contextKey = "veadk_call_type"
-	ContextKeyModelProvider contextKey = "veadk_model_provider"
+	ContextKeySessionId     contextKey = "veadk.session_id"
+	ContextKeyUserId        contextKey = "veadk.user_id"
+	ContextKeyAppName       contextKey = "veadk.app_name"
+	ContextKeyCallType      contextKey = "veadk.call_type"
+	ContextKeyModelProvider contextKey = "veadk.model_provider"
+	ContextKeyInvocationId  contextKey = "veadk.invocation_id"
 )

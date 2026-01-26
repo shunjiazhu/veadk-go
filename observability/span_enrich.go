@@ -22,11 +22,12 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// VeSpanEnrichmentProcessor implements sdktrace.SpanProcessor.
-// It enriches Google ADK internal spans with standard GenAI and platform attributes.
-type VeSpanEnrichmentProcessor struct{}
+// SpanEnrichmentProcessor implements sdktrace.SpanProcessor.
+// It enriches Google ADK internal spans with standard GenAI semantic conventions and
+// platform-specific attributes for CozeLoop, APMPlus, and TLS platforms.
+type SpanEnrichmentProcessor struct{}
 
-func (p *VeSpanEnrichmentProcessor) OnStart(parent context.Context, s sdktrace.ReadWriteSpan) {
+func (p *SpanEnrichmentProcessor) OnStart(parent context.Context, s sdktrace.ReadWriteSpan) {
 	name := s.Name()
 
 	// Capture common attributes
@@ -43,7 +44,7 @@ func (p *VeSpanEnrichmentProcessor) OnStart(parent context.Context, s sdktrace.R
 		}
 		SetToolAttributes(s, toolName)
 	case name == SpanInvokeAgent || strings.HasPrefix(name, SpanInvokeAgent+" "):
-		agentName := ValUnknownAgentName
+		agentName := FallbackAgentName
 		if parts := strings.SplitN(name, " ", 2); len(parts) == 2 {
 			agentName = parts[1]
 		}
@@ -53,7 +54,7 @@ func (p *VeSpanEnrichmentProcessor) OnStart(parent context.Context, s sdktrace.R
 	}
 }
 
-func (p *VeSpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
+func (p *SpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 	spanName := s.Name()
 	elapsed := s.EndTime().Sub(s.StartTime()).Seconds()
 	attrs := s.Attributes()
@@ -90,10 +91,10 @@ func (p *VeSpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 	}
 }
 
-func (p *VeSpanEnrichmentProcessor) Shutdown(ctx context.Context) error {
+func (p *SpanEnrichmentProcessor) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (p *VeSpanEnrichmentProcessor) ForceFlush(ctx context.Context) error {
+func (p *SpanEnrichmentProcessor) ForceFlush(ctx context.Context) error {
 	return nil
 }

@@ -79,9 +79,9 @@ func TestTranslatedSpan_InstrumentationScope(t *testing.T) {
 	assert.Equal(t, "1.0.0", scope.Version) // Keeps original version in this layer
 }
 
-func TestTranslatedExporter_ExportSpans(t *testing.T) {
+func TestADKTranslatedExporter_ExportSpans(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
-	te := &TranslatedExporter{SpanExporter: exporter}
+	te := &ADKTranslatedExporter{SpanExporter: exporter}
 
 	mockSpan := &tracetest.SpanStub{
 		Name: "test-span",

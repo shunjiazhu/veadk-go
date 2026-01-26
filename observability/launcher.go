@@ -88,6 +88,6 @@ func StartSpan(ctx context.Context, name string) (context.Context, trace.Span) {
 	tr := otel.Tracer(InstrumentationName)
 	ctx, span := tr.Start(ctx, name)
 
-	// Span is already enriched by VeSpanEnrichmentProcessor via OnStart
+	// Span is already enriched by SpanEnrichmentProcessor via OnStart
 	return ctx, span
 }

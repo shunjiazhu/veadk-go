@@ -28,15 +28,17 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// RegisterSpanProcessor is a wrapper of google adk's RegisterSpanProcessor.
-func RegisterSpanProcessor(processor sdktrace.SpanProcessor) {
+// AddSpanProcessor is a wrapper of google adk's RegisterSpanProcessor.
+func AddSpanProcessor(processor sdktrace.SpanProcessor) {
 	telemetry.RegisterSpanProcessor(processor)
 }
 
-// RegisterSpanExporter initializes the observability system by registering the exporter to
+// AddSpanExporter initializes the observability system by registering the exporter to
 // Google ADK's local telemetry. It does NOT overwrite the global OTel TracerProvider.
-func RegisterSpanExporter(exp sdktrace.SpanExporter) {
-	RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(&exporter.TranslatedExporter{SpanExporter: exp}))
+func AddSpanExporter(exp sdktrace.SpanExporter) {
+	// Always wrap with ADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
+	translatedExp := &exporter.ADKTranslatedExporter{SpanExporter: exp}
+	AddSpanProcessor(sdktrace.NewBatchSpanProcessor(translatedExp))
 }
 
 // Init initializes the observability system using the global configuration.
@@ -46,60 +48,68 @@ func Init(ctx context.Context) error {
 
 	if globalConfig == nil || globalConfig.Observability == nil || globalConfig.Observability.OpenTelemetry == nil {
 		log.Info("No observability config found, observability data will not be exported")
-		return InitWithConfig(ctx, nil)
+		return InitializeWithConfig(ctx, nil)
 	}
 
-	return InitWithConfig(ctx, globalConfig.Observability.OpenTelemetry)
+	return InitializeWithConfig(ctx, globalConfig.Observability.OpenTelemetry)
 }
 
-// RegisterGlobalTracer configures the global OpenTelemetry TracerProvider with the provided exporter.
+// SetGlobalTracerProvider configures the global OpenTelemetry TracerProvider with the provided exporter.
 // This is optional and used when you want unrelated OTel measurements to also be exported.
-func RegisterGlobalTracer(exporter sdktrace.SpanExporter, spanProcessors ...sdktrace.SpanProcessor) {
+func SetGlobalTracerProvider(exp sdktrace.SpanExporter, spanProcessors ...sdktrace.SpanProcessor) {
 	opts := []sdktrace.TracerProviderOption{
-		sdktrace.WithSpanProcessor(&VeSpanEnrichmentProcessor{}),
+		sdktrace.WithSpanProcessor(&SpanEnrichmentProcessor{}),
 	}
 	for _, sp := range spanProcessors {
 		opts = append(opts, sdktrace.WithSpanProcessor(sp))
 	}
+
+	// Always wrap with ADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
+	translatedExp := &exporter.ADKTranslatedExporter{SpanExporter: exp}
+
 	tp := sdktrace.NewTracerProvider(
-		append(opts, sdktrace.WithBatcher(exporter))...,
+		append(opts, sdktrace.WithBatcher(translatedExp))...,
 	)
 	otel.SetTracerProvider(tp)
-	log.Info("Registered global TracerProvider with exporter")
+	log.Info("Registered global TracerProvider with translated exporter")
 }
 
-func registerLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	log.Info("Registered VeSpanEnrichmentProcessor for ADK Local TracerProvider")
-	RegisterSpanProcessor(&VeSpanEnrichmentProcessor{})
+func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+	log.Info("Registered SpanEnrichmentProcessor for ADK Local TracerProvider")
+	AddSpanProcessor(&SpanEnrichmentProcessor{})
 
-	exp, err := exporter.NewMultiSpanExporter(ctx, cfg)
+	exp, err := exporter.NewMultiExporter(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	RegisterSpanExporter(exp)
+	if exp != nil {
+		AddSpanExporter(exp)
+	}
 	return nil
 }
 
-func registerGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	log.Info("Registered VeSpanEnrichmentProcessor for ADK Global TracerProvider")
+func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+	log.Info("Registered SpanEnrichmentProcessor for ADK Global TracerProvider")
 
-	globalExp, err := exporter.NewMultiSpanExporter(ctx, cfg)
+	globalExp, err := exporter.NewMultiExporter(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	RegisterGlobalTracer(globalExp)
+	if globalExp != nil {
+		SetGlobalTracerProvider(globalExp)
+	}
 	return nil
 }
 
-func initTraceProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+func initializeTraceProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
 	var errs []error
-	err := registerLocalTracer(ctx, cfg)
+	err := setupLocalTracer(ctx, cfg)
 	if err != nil {
 		errs = append(errs, err)
 	}
 
-	if cfg.EnableGlobalProvider {
-		err = registerGlobalTracer(ctx, cfg)
+	if cfg != nil && cfg.EnableGlobalProvider {
+		err = setupGlobalTracer(ctx, cfg)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -107,14 +117,14 @@ func initTraceProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) er
 	return errors.Join(errs...)
 }
 
-func initMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+func initializeMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
 	readers, err := exporter.NewMetricReader(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	RegisterLocalMetrics(readers)
 
-	if cfg.EnableGlobalProvider {
+	if cfg != nil && cfg.EnableGlobalProvider {
 		globalReaders, err := exporter.NewMetricReader(ctx, cfg)
 		if err != nil {
 			return err
@@ -124,16 +134,16 @@ func initMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) er
 	return nil
 }
 
-// InitWithConfig automatically initializes the observability system based on the provided configuration.
+// InitializeWithConfig automatically initializes the observability system based on the provided configuration.
 // It creates the appropriate exporter and calls RegisterExporter.
-func InitWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+func InitializeWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
 	var errs []error
-	err := initTraceProvider(ctx, cfg)
+	err := initializeTraceProvider(ctx, cfg)
 	if err != nil {
 		errs = append(errs, err)
 	}
 
-	err = initMeterProvider(ctx, cfg)
+	err = initializeMeterProvider(ctx, cfg)
 	if err != nil {
 		errs = append(errs, err)
 	}
