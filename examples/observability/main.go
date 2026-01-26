@@ -36,8 +36,8 @@ func main() {
 		log.Fatalf("Failed to create exporter: %v", err)
 	}
 
-	observability.RegisterExporter(stdExporter)
-	observability.RegisterGlobalTracer(stdExporter, "my-service")
+	observability.Init(context.Background())
+	observability.RegisterSpanExporter(stdExporter)
 
 	ctx := context.Background()
 

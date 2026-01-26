@@ -16,44 +16,65 @@ package exporter
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"sync"
 
+	"github.com/volcengine/veadk-go/configs"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/sdk/trace"
 
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
-// NewStdoutExporter creates a simple stdout exporter with pretty printing.
-func NewStdoutExporter() (trace.SpanExporter, error) {
+var (
+	fileWriters sync.Map
+)
+
+func getFileWriter(path string) io.Writer {
+	if path == "" {
+		return io.Discard
+	}
+	if fileWriter, ok := fileWriters.Load(path); ok {
+		return fileWriter.(io.Writer)
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return io.Discard
+	}
+
+	writers, _ := fileWriters.LoadOrStore(path, f)
+	return writers.(io.Writer)
+}
+
+// NewStdoutSpanExporter creates a simple stdout exporter with pretty printing.
+func NewStdoutSpanExporter() (trace.SpanExporter, error) {
 	return stdouttrace.New(stdouttrace.WithPrettyPrint())
 }
 
-// NewCozeLoopExporter creates an OTLP HTTP exporter for CozeLoop.
-func NewCozeLoopExporter(ctx context.Context, cfg *CozeLoopConfig) (trace.SpanExporter, error) {
+// NewCozeLoopSpanExporter creates an OTLP HTTP exporter for CozeLoop.
+func NewCozeLoopSpanExporter(ctx context.Context, cfg *configs.CozeLoopConfig) (trace.SpanExporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
-		endpoint = "api.coze.cn" // Default Coze domain
+		return nil, fmt.Errorf("CozeLoop exporter endpoint is required")
 	}
 
 	options := []otlptracehttp.Option{
 		otlptracehttp.WithEndpoint(endpoint),
 		otlptracehttp.WithHeaders(map[string]string{
-			"Authorization": "Bearer " + cfg.APIKey,
-			"X-Coze-Space":  cfg.ServiceName,
+			"authorization":         "Bearer " + cfg.APIKey,
+			"cozeloop-workspace-id": cfg.ServiceName,
 		}),
 	}
 
-	if !strings.HasPrefix(endpoint, "http") {
-		// If no scheme, assume HTTPS for Coze
+	if !strings.HasPrefix(endpoint, "https://") {
 		options = append(options, otlptracehttp.WithInsecure())
 	}
 
@@ -61,81 +82,77 @@ func NewCozeLoopExporter(ctx context.Context, cfg *CozeLoopConfig) (trace.SpanEx
 }
 
 // NewAPMPlusExporter creates an OTLP HTTP exporter for APMPlus.
-func NewAPMPlusExporter(ctx context.Context, cfg *ApmPlusConfig) (trace.SpanExporter, error) {
+func NewAPMPlusExporter(ctx context.Context, cfg *configs.ApmPlusConfig) (trace.SpanExporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
-		endpoint = "apmplus-cn-beijing.volces.com:4317"
+		return nil, fmt.Errorf("APMPlus exporter endpoint is required")
 	}
 
 	options := []otlptracehttp.Option{
 		otlptracehttp.WithEndpoint(endpoint),
 		otlptracehttp.WithHeaders(map[string]string{
-			"Authorization": cfg.APIKey,
+			"x-byteapm-appkey": cfg.APIKey,
 		}),
 	}
 
-	options = append(options, otlptracehttp.WithInsecure())
+	if !strings.HasPrefix(endpoint, "https://") {
+		options = append(options, otlptracehttp.WithInsecure())
+	}
 
 	return otlptrace.New(ctx, otlptracehttp.NewClient(options...))
 }
 
-// NewTLSExporter creates an OTLP HTTP exporter for Volcano TLS.
-func NewTLSExporter(ctx context.Context, cfg *TLSExporterConfig) (trace.SpanExporter, error) {
+// NewTLSSpanExporter creates an OTLP HTTP exporter for Volcano TLS.
+func NewTLSSpanExporter(ctx context.Context, cfg *configs.TLSExporterConfig) (trace.SpanExporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
-		region := cfg.Region
-		if region == "" {
-			region = "cn-beijing"
-		}
-		endpoint = fmt.Sprintf("tls-%s.volces.com:4318", region)
+		return nil, fmt.Errorf("TLS exporter endpoint is required")
 	}
 
 	options := []otlptracehttp.Option{
 		otlptracehttp.WithEndpoint(endpoint),
 		otlptracehttp.WithHeaders(map[string]string{
-			"Authorization": cfg.APIKey,
+			"x-tls-otel-tracetopic": cfg.TopicID,
+			"x-tls-otel-ak":         cfg.AccessKey,
+			"x-tls-otel-sk":         cfg.SecretKey,
+			"x-tls-otel-region":     cfg.Region,
 		}),
+	}
+
+	if !strings.HasPrefix(endpoint, "https://") {
+		options = append(options, otlptracehttp.WithInsecure())
 	}
 
 	return otlptrace.New(ctx, otlptracehttp.NewClient(options...))
 }
 
-// NewFileExporter creates a span exporter that writes traces to a file.
-func NewFileExporter(ctx context.Context, cfg Config) (trace.SpanExporter, error) {
-	path := cfg.FilePath
-	if path == "" {
-		path = "trace.json"
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create trace file: %w", err)
-	}
+// NewFileSpanExporter creates a span exporter that writes traces to a file.
+func NewFileSpanExporter(ctx context.Context, cfg *configs.FileConfig) (trace.SpanExporter, error) {
+	f := getFileWriter(cfg.Path)
 	return stdouttrace.New(stdouttrace.WithWriter(f), stdouttrace.WithPrettyPrint())
 }
 
 // NewMultiSpanExporter creates a span exporter that can export to multiple platforms simultaneously.
 // It wraps the results in a TranslatedExporter.
-func NewMultiSpanExporter(ctx context.Context, cfg Config) (trace.SpanExporter, error) {
+func NewMultiSpanExporter(ctx context.Context, cfg *configs.OpenTelemetryConfig) (trace.SpanExporter, error) {
 	var exporters []trace.SpanExporter
 
 	// 1. Explicit Exporter Types (Stdout/File)
-	if cfg.ExporterType == ExporterStdout {
-		exp, err := NewStdoutExporter()
-		if err != nil {
-			return nil, err
+	if cfg.Stdout != nil && cfg.Stdout.Enable {
+		if exp, err := NewStdoutSpanExporter(); err == nil {
+			exporters = append(exporters, exp)
 		}
-		exporters = append(exporters, exp)
-	} else if cfg.ExporterType == ExporterFile {
-		exp, err := NewFileExporter(ctx, cfg)
-		if err != nil {
-			return nil, err
+	}
+
+	if cfg.File != nil && cfg.File.Path != "" {
+		if exp, err := NewFileSpanExporter(ctx, cfg.File); err == nil {
+			exporters = append(exporters, exp)
 		}
-		exporters = append(exporters, exp)
 	}
 
 	// 2. Platform Exporters (Can be multiple)
 	if cfg.CozeLoop != nil && cfg.CozeLoop.APIKey != "" {
-		if exp, err := NewCozeLoopExporter(ctx, cfg.CozeLoop); err == nil {
+		if exp, err := NewCozeLoopSpanExporter(ctx, cfg.CozeLoop); err == nil {
 			exporters = append(exporters, exp)
 		}
 	}
@@ -144,14 +161,10 @@ func NewMultiSpanExporter(ctx context.Context, cfg Config) (trace.SpanExporter, 
 			exporters = append(exporters, exp)
 		}
 	}
-	if cfg.TLS != nil && cfg.TLS.APIKey != "" {
-		if exp, err := NewTLSExporter(ctx, cfg.TLS); err == nil {
+	if cfg.TLS != nil && cfg.TLS.AccessKey != "" && cfg.TLS.SecretKey != "" {
+		if exp, err := NewTLSSpanExporter(ctx, cfg.TLS); err == nil {
 			exporters = append(exporters, exp)
 		}
-	}
-
-	if len(exporters) == 0 {
-		return nil, fmt.Errorf("no valid exporter configuration found")
 	}
 
 	var finalExp trace.SpanExporter
@@ -187,21 +200,21 @@ func (m *multiSpanExporter) Shutdown(ctx context.Context) error {
 }
 
 // NewMetricReader creates one or more metric readers based on the provided configuration.
-func NewMetricReader(ctx context.Context, cfg Config) ([]sdkmetric.Reader, error) {
+func NewMetricReader(ctx context.Context, cfg *configs.OpenTelemetryConfig) ([]sdkmetric.Reader, error) {
 	var readers []sdkmetric.Reader
 
-	// 1. Explicit Types
-	if cfg.ExporterType == ExporterStdout {
+	if cfg.Stdout != nil && cfg.Stdout.Enable {
 		if exp, err := stdoutmetric.New(stdoutmetric.WithPrettyPrint()); err == nil {
 			readers = append(readers, sdkmetric.NewPeriodicReader(exp))
 		}
-	} else if cfg.ExporterType == ExporterFile {
-		if r, err := NewFileMetricReader(ctx, cfg); err == nil {
-			readers = append(readers, r)
+	}
+
+	if cfg.File != nil && cfg.File.Path != "" {
+		if exp, err := NewFileMetricExporter(ctx, cfg.File); err == nil {
+			readers = append(readers, sdkmetric.NewPeriodicReader(exp))
 		}
 	}
 
-	// 2. Platforms
 	if cfg.CozeLoop != nil && cfg.CozeLoop.APIKey != "" {
 		if exp, err := NewCozeLoopMetricExporter(ctx, cfg.CozeLoop); err == nil {
 			readers = append(readers, sdkmetric.NewPeriodicReader(exp))
@@ -212,7 +225,7 @@ func NewMetricReader(ctx context.Context, cfg Config) ([]sdkmetric.Reader, error
 			readers = append(readers, sdkmetric.NewPeriodicReader(exp))
 		}
 	}
-	if cfg.TLS != nil && cfg.TLS.APIKey != "" {
+	if cfg.TLS != nil && cfg.TLS.AccessKey != "" && cfg.TLS.SecretKey != "" {
 		if exp, err := NewTLSMetricExporter(ctx, cfg.TLS); err == nil {
 			readers = append(readers, sdkmetric.NewPeriodicReader(exp))
 		}
@@ -225,95 +238,72 @@ func NewMetricReader(ctx context.Context, cfg Config) ([]sdkmetric.Reader, error
 }
 
 // NewCozeLoopMetricExporter creates an OTLP Metric exporter for CozeLoop.
-func NewCozeLoopMetricExporter(ctx context.Context, cfg *CozeLoopConfig) (sdkmetric.Exporter, error) {
+func NewCozeLoopMetricExporter(ctx context.Context, cfg *configs.CozeLoopConfig) (sdkmetric.Exporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
-		endpoint = "api.coze.cn"
+		return nil, fmt.Errorf("CozeLoop exporter endpoint is required")
 	}
+
 	// CozeLoop usually uses HTTP/HTTPS
 	options := []otlpmetrichttp.Option{
 		otlpmetrichttp.WithEndpoint(endpoint),
 		otlpmetrichttp.WithHeaders(map[string]string{
-			"Authorization": "Bearer " + cfg.APIKey,
-			"X-Coze-Space":  cfg.ServiceName,
+			"authorization":         "Bearer " + cfg.APIKey,
+			"cozeloop-workspace-id": cfg.ServiceName,
 		}),
 	}
-	if !strings.HasPrefix(endpoint, "http") {
+
+	if !strings.HasPrefix(endpoint, "https://") {
 		options = append(options, otlpmetrichttp.WithInsecure())
 	}
+
 	return otlpmetrichttp.New(ctx, options...)
 }
 
 // NewAPMPlusMetricExporter creates an OTLP Metric exporter for APMPlus.
 // Supports automatic gRPC (4317) detection.
-func NewAPMPlusMetricExporter(ctx context.Context, cfg *ApmPlusConfig) (sdkmetric.Exporter, error) {
+func NewAPMPlusMetricExporter(ctx context.Context, cfg *configs.ApmPlusConfig) (sdkmetric.Exporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
-		endpoint = "apmplus-cn-beijing.volces.com:4317"
-	}
-
-	// Heuristic: if port 4317 is explicitly mentioned or endpoint implies gRPC, use gRPC.
-	// Otherwise default to HTTP (4318) or whatever is configured.
-	if strings.Contains(endpoint, ":4317") {
-		options := []otlpmetricgrpc.Option{
-			otlpmetricgrpc.WithEndpoint(endpoint),
-			otlpmetricgrpc.WithHeaders(map[string]string{
-				"Authorization": cfg.APIKey,
-			}),
-			otlpmetricgrpc.WithInsecure(), // Usually internal/VPC or explicit
-		}
-		return otlpmetricgrpc.New(ctx, options...)
+		return nil, fmt.Errorf("APMPlus exporter endpoint is required")
 	}
 
 	// Default to HTTP
 	options := []otlpmetrichttp.Option{
 		otlpmetrichttp.WithEndpoint(endpoint),
 		otlpmetrichttp.WithHeaders(map[string]string{
-			"Authorization": cfg.APIKey,
+			"x-byteapm-appkey": cfg.APIKey,
 		}),
-		otlpmetrichttp.WithInsecure(),
+	}
+
+	if !strings.HasPrefix(endpoint, "https://") {
+		options = append(options, otlpmetrichttp.WithInsecure())
 	}
 	return otlpmetrichttp.New(ctx, options...)
 }
 
 // NewTLSMetricExporter creates an OTLP Metric exporter for Volcano TLS.
-func NewTLSMetricExporter(ctx context.Context, cfg *TLSExporterConfig) (sdkmetric.Exporter, error) {
+func NewTLSMetricExporter(ctx context.Context, cfg *configs.TLSExporterConfig) (sdkmetric.Exporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
-		region := cfg.Region
-		if region == "" {
-			region = "cn-beijing"
-		}
-		endpoint = fmt.Sprintf("tls-%s.volces.com:4318", region)
+		return nil, fmt.Errorf("TLS exporter endpoint is required")
 	}
 
 	options := []otlpmetrichttp.Option{
 		otlpmetrichttp.WithEndpoint(endpoint),
 		otlpmetrichttp.WithHeaders(map[string]string{
-			"Authorization": cfg.APIKey,
+			"x-tls-otel-tracetopic": cfg.TopicID,
+			"x-tls-otel-ak":         cfg.AccessKey,
+			"x-tls-otel-sk":         cfg.SecretKey,
+			"x-tls-otel-region":     cfg.Region,
 		}),
 	}
 	return otlpmetrichttp.New(ctx, options...)
 }
 
-// NewFileMetricReader creates a metric reader that writes metrics to a file.
-func NewFileMetricReader(ctx context.Context, cfg Config) (sdkmetric.Reader, error) {
-	path := cfg.FilePath
-	if path == "" {
-		path = "metrics.json" // Different default than traces
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create metric file: %w", err)
-	}
+// NewFileMetricExporter creates a metric exporter that writes metrics to a file.
+func NewFileMetricExporter(ctx context.Context, cfg *configs.FileConfig) (sdkmetric.Exporter, error) {
+	writer := getFileWriter(cfg.Path)
 
-	// Use standard JSON encoder which satisfies stdoutmetric.Encoder interface
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "\t")
-
-	exp, err := stdoutmetric.New(stdoutmetric.WithEncoder(enc))
-	if err != nil {
-		return nil, err
-	}
-	return sdkmetric.NewPeriodicReader(exp), nil
+	return stdoutmetric.New(stdoutmetric.WithWriter(writer), stdoutmetric.WithPrettyPrint())
 }

@@ -18,15 +18,12 @@ import (
 	"context"
 	"encoding/json"
 	"iter"
-	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/adk/agent"
 	"google.golang.org/adk/cmd/launcher"
 	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool"
 )
 
 // ObservedLauncher wraps an adk launcher to provide automatic root span and context propagation.
@@ -41,9 +38,6 @@ func NewObservedLauncher(base launcher.Launcher) launcher.Launcher {
 func (l *ObservedLauncher) Execute(ctx context.Context, config *launcher.Config, args []string) error {
 	// Attempt to get user/session from config or env if not present in context
 	userID := GetUserId(ctx)
-	if userID == "" {
-		userID = "default-user"
-	}
 	sessionID := GetSessionId(ctx)
 
 	// Since launcher.Execute blocks, we wrap it in a function that yields a dummy event or error.
@@ -61,50 +55,6 @@ func (l *ObservedLauncher) Execute(ctx context.Context, config *launcher.Config,
 		return err
 	}
 	return nil
-}
-
-// context wrappers to support tracing propagation for tool functions.
-
-type tracedInvocationContext struct {
-	agent.InvocationContext
-	tracedCtx context.Context
-}
-
-func (c *tracedInvocationContext) Value(key any) any {
-	return c.tracedCtx.Value(key)
-}
-
-func (c *tracedInvocationContext) Deadline() (deadline time.Time, ok bool) {
-	return c.tracedCtx.Deadline()
-}
-
-func (c *tracedInvocationContext) Done() <-chan struct{} {
-	return c.tracedCtx.Done()
-}
-
-func (c *tracedInvocationContext) Err() error {
-	return c.tracedCtx.Err()
-}
-
-type tracedToolContext struct {
-	tool.Context
-	tracedCtx context.Context
-}
-
-func (c *tracedToolContext) Value(key any) any {
-	return c.tracedCtx.Value(key)
-}
-
-func (c *tracedToolContext) Deadline() (deadline time.Time, ok bool) {
-	return c.tracedCtx.Deadline()
-}
-
-func (c *tracedToolContext) Done() <-chan struct{} {
-	return c.tracedCtx.Done()
-}
-
-func (c *tracedToolContext) Err() error {
-	return c.tracedCtx.Err()
 }
 
 // TraceRun is a helper to wrap runner.Run calls with an 'invocation' span.

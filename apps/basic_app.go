@@ -21,6 +21,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/a2asrv"
 	"github.com/gorilla/mux"
+	"github.com/volcengine/veadk-go/observability"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/artifact"
 	"google.golang.org/adk/memory"
@@ -96,4 +97,8 @@ func (a *ApiConfig) GetWebUrl() string {
 
 func (a *ApiConfig) GetAPIPath() string {
 	return fmt.Sprintf("http://localhost:%d%s", a.Port, a.ApiPathPrefix)
+}
+
+func init() {
+	observability.Init(context.Background())
 }

@@ -23,20 +23,48 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
 
 var (
 	// Slices to hold instruments from multiple providers (Global, Local, etc.)
-	instrumentsMu               sync.RWMutex
+	localOnce     sync.Once
+	globalOnce    sync.Once
+	instrumentsMu sync.RWMutex
+
 	tokenUsageCounters          []metric.Int64Counter
 	operationDurationHistograms []metric.Float64Histogram
 	firstTokenLatencyHistograms []metric.Float64Histogram
-
-	localOnce  sync.Once
-	globalOnce sync.Once
 )
+
+// RegisterLocalMetrics initializes the metrics system with a local isolated MeterProvider.
+// It does NOT overwrite the global OTel MeterProvider.
+func RegisterLocalMetrics(readers []sdkmetric.Reader) {
+	localOnce.Do(func() {
+		options := []sdkmetric.Option{}
+		for _, r := range readers {
+			options = append(options, sdkmetric.WithReader(r))
+		}
+
+		mp := sdkmetric.NewMeterProvider(options...)
+		registerMeter(mp.Meter(InstrumentationName))
+	})
+}
+
+// RegisterGlobalMetrics configures the global OpenTelemetry MeterProvider with the provided readers.
+// This is optional and used when you want unrelated OTel measurements to also be exported.
+func RegisterGlobalMetrics(readers []sdkmetric.Reader) {
+	globalOnce.Do(func() {
+		options := []sdkmetric.Option{}
+		for _, r := range readers {
+			options = append(options, sdkmetric.WithReader(r))
+		}
+
+		mp := sdkmetric.NewMeterProvider(options...)
+		otel.SetMeterProvider(mp)
+		// No need to call registerMeter here, because the global proxy registered in init()
+		registerMeter(otel.GetMeterProvider().Meter(InstrumentationName))
+	})
+}
 
 func registerMeter(meter metric.Meter) {
 	instrumentsMu.Lock()
@@ -53,82 +81,22 @@ func registerMeter(meter metric.Meter) {
 	}
 }
 
-// RegisterMetrics initializes the metrics system with a local isolated MeterProvider.
-// It does NOT overwrite the global OTel MeterProvider.
-func RegisterMetrics(readers []sdkmetric.Reader, serviceName string) {
-	if len(readers) == 0 {
-		return
-	}
-	localOnce.Do(func() {
-		res, _ := resource.Merge(
-			resource.Default(),
-			resource.NewWithAttributes(
-				semconv.SchemaURL,
-				semconv.ServiceNameKey.String(serviceName),
-			),
-		)
-
-		options := []sdkmetric.Option{
-			sdkmetric.WithResource(res),
-		}
-		for _, r := range readers {
-			options = append(options, sdkmetric.WithReader(r))
-		}
-
-		mp := sdkmetric.NewMeterProvider(options...)
-		registerMeter(mp.Meter(InstrumentationName))
-	})
-}
-
-// RegisterGlobalMetrics configures the global OpenTelemetry MeterProvider with the provided readers.
-// This is optional and used when you want unrelated OTel measurements to also be exported.
-func RegisterGlobalMetrics(readers []sdkmetric.Reader, serviceName string) {
-	if len(readers) == 0 {
-		return
-	}
-	globalOnce.Do(func() {
-		res, _ := resource.Merge(
-			resource.Default(),
-			resource.NewWithAttributes(
-				semconv.SchemaURL,
-				semconv.ServiceNameKey.String(serviceName),
-			),
-		)
-
-		options := []sdkmetric.Option{
-			sdkmetric.WithResource(res),
-		}
-		for _, r := range readers {
-			options = append(options, sdkmetric.WithReader(r))
-		}
-
-		mp := sdkmetric.NewMeterProvider(options...)
-		otel.SetMeterProvider(mp)
-		// No need to call registerMeter here, because the global proxy registered in init()
-		registerMeter(otel.GetMeterProvider().Meter(InstrumentationName))
-	})
-}
-
 // RecordTokenUsage records the number of tokens used.
 func RecordTokenUsage(ctx context.Context, input, output int64, attrs ...attribute.KeyValue) {
-	instrumentsMu.RLock()
-	defer instrumentsMu.RUnlock()
-
 	for _, counter := range tokenUsageCounters {
 		if input > 0 {
-			counter.Add(ctx, input, metric.WithAttributes(append(attrs, attribute.String("token.direction", "input"))...))
+			counter.Add(ctx, input, metric.WithAttributes(
+				append(attrs, attribute.String("token.direction", "input"))...))
 		}
 		if output > 0 {
-			counter.Add(ctx, output, metric.WithAttributes(append(attrs, attribute.String("token.direction", "output"))...))
+			counter.Add(ctx, output, metric.WithAttributes(
+				append(attrs, attribute.String("token.direction", "output"))...))
 		}
 	}
 }
 
 // RecordOperationDuration records the duration of an operation.
 func RecordOperationDuration(ctx context.Context, durationSeconds float64, attrs ...attribute.KeyValue) {
-	instrumentsMu.RLock()
-	defer instrumentsMu.RUnlock()
-
 	for _, histogram := range operationDurationHistograms {
 		histogram.Record(ctx, durationSeconds, metric.WithAttributes(attrs...))
 	}
@@ -136,9 +104,6 @@ func RecordOperationDuration(ctx context.Context, durationSeconds float64, attrs
 
 // RecordFirstTokenLatency records the latency to the first token.
 func RecordFirstTokenLatency(ctx context.Context, latencySeconds float64, attrs ...attribute.KeyValue) {
-	instrumentsMu.RLock()
-	defer instrumentsMu.RUnlock()
-
 	for _, histogram := range firstTokenLatencyHistograms {
 		histogram.Record(ctx, latencySeconds, metric.WithAttributes(attrs...))
 	}

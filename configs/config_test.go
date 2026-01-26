@@ -111,10 +111,10 @@ opentelemetry:
 	assert.Equal(t, "http://apmplus-example.com", config.OpenTelemetry.ApmPlus.Endpoint)
 	assert.Equal(t, "test-key", config.OpenTelemetry.ApmPlus.APIKey)
 	assert.Equal(t, "test-service", config.OpenTelemetry.ApmPlus.ServiceName)
-	assert.True(t, config.OpenTelemetry.EnableGlobalTracer)
+	assert.True(t, config.OpenTelemetry.EnableGlobalProvider)
 
 	assert.Equal(t, "test-service", config.OpenTelemetry.ApmPlus.ServiceName)
-	assert.True(t, config.OpenTelemetry.EnableGlobalTracer)
+	assert.True(t, config.OpenTelemetry.EnableGlobalProvider)
 }
 
 func TestObservabilityConfig_EnvMapping(t *testing.T) {
@@ -131,7 +131,7 @@ func TestObservabilityConfig_EnvMapping(t *testing.T) {
 	assert.NotNil(t, config.OpenTelemetry)
 	assert.NotNil(t, config.OpenTelemetry.ApmPlus)
 	assert.Equal(t, "http://env-endpoint", config.OpenTelemetry.ApmPlus.Endpoint)
-	assert.True(t, config.OpenTelemetry.EnableGlobalTracer)
+	assert.True(t, config.OpenTelemetry.EnableGlobalProvider)
 }
 
 func TestObservabilityConfig_LegacyEnvMapping(t *testing.T) {
@@ -142,7 +142,7 @@ func TestObservabilityConfig_LegacyEnvMapping(t *testing.T) {
 	config.MapEnvToConfig()
 
 	assert.NotNil(t, config.OpenTelemetry)
-	assert.True(t, config.OpenTelemetry.EnableGlobalTracer)
+	assert.True(t, config.OpenTelemetry.EnableGlobalProvider)
 }
 
 func TestObservabilityConfig_Priority(t *testing.T) {

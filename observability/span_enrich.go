@@ -54,7 +54,7 @@ func (p *VeSpanEnrichmentProcessor) OnStart(parent context.Context, s sdktrace.R
 }
 
 func (p *VeSpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
-	name := s.Name()
+	spanName := s.Name()
 	elapsed := s.EndTime().Sub(s.StartTime()).Seconds()
 	attrs := s.Attributes()
 
@@ -67,7 +67,7 @@ func (p *VeSpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 		}
 	}
 
-	if name == SpanCallLLM {
+	if spanName == SpanCallLLM {
 		RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
 
 		// Record token usage if available in attributes
@@ -85,7 +85,7 @@ func (p *VeSpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 			RecordTokenUsage(context.Background(), input, output, metricAttrs...)
 		}
 
-	} else if strings.HasPrefix(name, SpanExecuteTool) {
+	} else if strings.HasPrefix(spanName, SpanExecuteTool) {
 		RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
 	}
 }
