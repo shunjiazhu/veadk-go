@@ -50,7 +50,7 @@ func TestMetricsRecording(t *testing.T) {
 				if m.Name == MetricNameLLMTokenUsage {
 					data := m.Data.(metricdata.Histogram[float64])
 					for _, dp := range data.DataPoints {
-						dir, _ := dp.Attributes.Value("token.direction")
+						dir, _ := dp.Attributes.Value("gen_ai_token_type")
 						if dir.AsString() == "input" {
 							assert.Equal(t, uint64(1), dp.Count)
 							assert.Equal(t, 10.0, dp.Sum)
@@ -250,7 +250,7 @@ func TestMetricsRecording(t *testing.T) {
 				if m.Name == MetricNameAPMPlusToolTokenUsage {
 					data := m.Data.(metricdata.Histogram[float64])
 					for _, dp := range data.DataPoints {
-						dir, _ := dp.Attributes.Value("token.direction")
+						dir, _ := dp.Attributes.Value("token_type")
 						if dir.AsString() == "input" {
 							assert.Equal(t, uint64(1), dp.Count)
 							assert.Equal(t, 5.0, dp.Sum)

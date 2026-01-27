@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -61,15 +62,44 @@ func (p *SpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 
 	// Convert trace attributes to metric attributes
 	var metricAttrs []attribute.KeyValue
+	var modelName string
 	for _, kv := range attrs {
 		// Map specific trace attributes to metric dimensions
 		if kv.Key == GenAIRequestModelKey {
-			metricAttrs = append(metricAttrs, attribute.String(GenAIRequestModelKey, kv.Value.AsString()))
+			modelName = kv.Value.AsString()
+			metricAttrs = append(metricAttrs, attribute.String(GenAIRequestModelKey, modelName))
 		}
 	}
 
+	// Common attributes for APMPlus
+	apmplusAttrs := append(metricAttrs,
+		attribute.String("gen_ai_system", "volcengine"),
+		attribute.String("server_address", "api.volcengine.com"),
+	)
+
 	if spanName == SpanCallLLM {
+		// Add LLM-specific attributes
+		llmAttrs := append(apmplusAttrs,
+			attribute.String("gen_ai_operation_name", "chat"),
+			attribute.String("gen_ai_operation_type", "llm"),
+			attribute.String("stream", "false"),
+		)
+
+		// Add gen_ai_response_model if available
+		if modelName != "" {
+			llmAttrs = append(llmAttrs, attribute.String("gen_ai_response_model", modelName))
+		}
+
+		// Record operation duration
 		RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
+
+		// Record LLM invocation count
+		RecordLLMInvocation(context.Background(), llmAttrs...)
+
+		// Check for exceptions
+		if s.Status().Code != codes.Ok {
+			RecordChatException(context.Background(), llmAttrs...)
+		}
 
 		// Record token usage if available in attributes
 		var input, output int64
@@ -83,11 +113,57 @@ func (p *SpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 		}
 
 		if input > 0 || output > 0 {
-			RecordTokenUsage(context.Background(), input, output, metricAttrs...)
+			RecordTokenUsage(context.Background(), input, output, llmAttrs...)
 		}
 
+		// Record APMPlus span latency
+		RecordAPMPlusSpanLatency(context.Background(), elapsed, llmAttrs...)
+
 	} else if strings.HasPrefix(spanName, SpanExecuteTool) {
+		// Get tool name from span name (remove "tool." prefix)
+		toolName := spanName
+		if strings.HasPrefix(toolName, "tool.") {
+			toolName = toolName[5:]
+		}
+
+		// Add tool-specific attributes
+		toolAttrs := append(metricAttrs,
+			attribute.String("gen_ai_operation_name", toolName),
+			attribute.String("gen_ai_operation_type", "tool"),
+			attribute.String("gen_ai_operation_backend", ""), // Default empty
+		)
+
+		// Record operation duration
 		RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
+
+		// Record APMPlus span latency
+		RecordAPMPlusSpanLatency(context.Background(), elapsed, toolAttrs...)
+
+		// Estimate tool token usage based on text length (like Python does)
+		var toolInput, toolOutput string
+		for _, kv := range attrs {
+			switch kv.Key {
+			case "gen_ai.tool.input":
+				toolInput = kv.Value.AsString()
+			case "gen_ai.tool.output":
+				toolOutput = kv.Value.AsString()
+			}
+		}
+
+		if toolInput != "" || toolOutput != "" {
+			RecordAPMPlusToolTokenUsage(context.Background(), int64(len(toolInput)/4), int64(len(toolOutput)/4), toolAttrs...)
+		}
+
+	} else if spanName == SpanInvokeAgent || spanName == SpanInvocation {
+		// Record operation duration for agent spans
+		RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
+
+		// Record APMPlus span latency for agent spans
+		agentAttrs := append(apmplusAttrs,
+			attribute.String("gen_ai_operation_name", spanName),
+			attribute.String("gen_ai_operation_type", "agent"),
+		)
+		RecordAPMPlusSpanLatency(context.Background(), elapsed, agentAttrs...)
 	}
 }
 
