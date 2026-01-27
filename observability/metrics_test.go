@@ -31,7 +31,7 @@ func TestMetricsRecording(t *testing.T) {
 	meter := mp.Meter("test-meter")
 
 	// Initialize instruments into the global slice (this appends, which is fine for testing)
-	InitializeInstruments(meter)
+	initializeInstruments(meter)
 
 	ctx := context.Background()
 	attrs := []attribute.KeyValue{attribute.String("test.key", "test.val")}

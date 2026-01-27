@@ -31,7 +31,7 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	// Initialize instruments into global slice for this test
-	InitializeInstruments(mp.Meter("processor-test"))
+	initializeInstruments(mp.Meter("processor-test"))
 
 	// 2. Setup Tracer with Processor
 	exporter := tracetest.NewInMemoryExporter()

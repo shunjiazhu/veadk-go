@@ -49,7 +49,7 @@ func (p *SpanEnrichmentProcessor) OnStart(parent context.Context, s sdktrace.Rea
 			agentName = parts[1]
 		}
 		SetAgentAttributes(s, agentName)
-	case name == "Run" || name == SpanInvocation:
+	case name == SpanInvocation || name == "Run":
 		SetWorkflowAttributes(s)
 	}
 }

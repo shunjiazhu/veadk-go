@@ -73,7 +73,7 @@ func RegisterLocalMetrics(readers []sdkmetric.Reader) {
 		}
 
 		mp := sdkmetric.NewMeterProvider(options...)
-		InitializeInstruments(mp.Meter(InstrumentationName))
+		initializeInstruments(mp.Meter(InstrumentationName))
 	})
 }
 
@@ -89,12 +89,13 @@ func RegisterGlobalMetrics(readers []sdkmetric.Reader) {
 		mp := sdkmetric.NewMeterProvider(options...)
 		otel.SetMeterProvider(mp)
 		// No need to call registerMeter here, because the global proxy registered in init()
-		InitializeInstruments(otel.GetMeterProvider().Meter(InstrumentationName))
+		initializeInstruments(otel.GetMeterProvider().Meter(InstrumentationName))
 	})
 }
 
-// InitializeInstruments initializes the metrics instruments for the provided meter.
-func InitializeInstruments(m metric.Meter) {
+// initializeInstruments initializes the metrics instruments for the provided meter.
+// This function is internal and should not be called directly
+func initializeInstruments(m metric.Meter) {
 	instrumentsMu.Lock()
 	defer instrumentsMu.Unlock()
 

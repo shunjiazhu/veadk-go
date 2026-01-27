@@ -41,6 +41,7 @@ var (
 
 func getFileWriter(path string) io.Writer {
 	if path == "" {
+		log.Warn("No path provided for file writer, using io.Discard")
 		return io.Discard
 	}
 	if fileWriter, ok := fileWriters.Load(path); ok {
@@ -49,6 +50,7 @@ func getFileWriter(path string) io.Writer {
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
+		log.Warn("Failed to open file for exporter, will use io.Discard instead", "path", path, "err", err)
 		return io.Discard
 	}
 
