@@ -120,10 +120,10 @@ func (p *SpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 		RecordAPMPlusSpanLatency(context.Background(), elapsed, llmAttrs...)
 
 	} else if strings.HasPrefix(spanName, SpanExecuteTool) {
-		// Get tool name from span name (remove "tool." prefix)
-		toolName := spanName
-		if strings.HasPrefix(toolName, "tool.") {
-			toolName = toolName[5:]
+		// Get tool name from attributes (most reliable source)
+		toolName := ""
+		if parts := strings.SplitN(spanName, " ", 2); len(parts) == 2 {
+			toolName = parts[1]
 		}
 
 		// Add tool-specific attributes
@@ -141,12 +141,18 @@ func (p *SpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 
 		// Estimate tool token usage based on text length (like Python does)
 		var toolInput, toolOutput string
+		found := 0
 		for _, kv := range attrs {
 			switch kv.Key {
 			case "gen_ai.tool.input":
 				toolInput = kv.Value.AsString()
+				found++
 			case "gen_ai.tool.output":
 				toolOutput = kv.Value.AsString()
+				found++
+			}
+			if found == 2 {
+				break
 			}
 		}
 
