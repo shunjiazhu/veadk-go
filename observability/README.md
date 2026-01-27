@@ -130,3 +130,24 @@ func main() {
     }
 }
 ```
+
+## Metrics (Aligned with Python ADK)
+
+This package automatically records standard GenAI metrics when **APMPlus** is configured. The metrics are fully aligned with the Python ADK implementation.
+
+### Standard GenAI Metrics
+- `gen_ai.chat.count`: Counter for number of LLM invocations.
+- `gen_ai.client.token.usage`: Histogram for input/output token usage.
+- `gen_ai.client.operation.duration`: Histogram for LLM operation latency.
+- `gen_ai.chat_completions.exceptions`: Counter for exceptions during chat completions.
+
+### Streaming Metrics
+- `gen_ai.chat_completions.streaming_time_to_first_token`: Time to first token.
+- `gen_ai.chat_completions.streaming_time_to_generate`: Total generation time.
+- `gen_ai.chat_completions.streaming_time_per_output_token`: Average time per output token.
+
+### APMPlus Custom Metrics
+- `apmplus_span_latency`: Latency for both LLM and Tool spans.
+- `apmplus_tool_token_usage`: Estimated token usage for tool inputs (type=input) and outputs (type=output), calculated as `char_len / 4`.
+
+> **Note**: Metrics collection is automatically enabled when APMPlus configuration involves an API Key.

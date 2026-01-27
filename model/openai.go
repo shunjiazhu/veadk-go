@@ -29,6 +29,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/volcengine/veadk-go/common"
+	"github.com/volcengine/veadk-go/observability"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
@@ -96,10 +99,71 @@ func (m *openAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		openaiReq.ExtraBody = extraBody.(map[string]any)
 	}
 
+	span := trace.SpanFromContext(ctx)
+
 	if stream {
-		return m.generateStream(ctx, openaiReq)
+		next := m.generateStream(ctx, openaiReq)
+		return func(yield func(*model.LLMResponse, error) bool) {
+			for resp, err := range next {
+				m.traceResponse(span, req, resp, err)
+				if !yield(resp, err) {
+					return
+				}
+			}
+		}
 	}
-	return m.generate(ctx, openaiReq)
+
+	next := m.generate(ctx, openaiReq)
+	return func(yield func(*model.LLMResponse, error) bool) {
+		for resp, err := range next {
+			m.traceResponse(span, req, resp, err)
+			if !yield(resp, err) {
+				return
+			}
+		}
+	}
+}
+
+// traceResponse records GenAI attributes to the span.
+func (m *openAIModel) traceResponse(span trace.Span, req *model.LLMRequest, resp *model.LLMResponse, err error) {
+	if !span.IsRecording() {
+		return
+	}
+
+	// Record request model
+	span.SetAttributes(attribute.String(observability.AttrGenAIRequestModel, m.name))
+
+	if err != nil {
+		return
+	}
+
+	if resp != nil {
+		if resp.UsageMetadata != nil {
+			inputTokens := int64(resp.UsageMetadata.PromptTokenCount)
+			outputTokens := int64(resp.UsageMetadata.CandidatesTokenCount)
+			totalTokens := int64(resp.UsageMetadata.TotalTokenCount)
+
+			// If TotalTokenCount is 0 but others are not, calculate it
+			if totalTokens == 0 && (inputTokens > 0 || outputTokens > 0) {
+				totalTokens = inputTokens + outputTokens
+			}
+
+			// Standard GenAI Usage Attributes
+			attrs := []attribute.KeyValue{}
+			if inputTokens > 0 {
+				attrs = append(attrs, attribute.Int64(observability.AttrGenAIUsageInputTokens, inputTokens))
+				attrs = append(attrs, attribute.Int64(observability.AttrGenAIResponsePromptTokenCount, inputTokens))
+			}
+			if outputTokens > 0 {
+				attrs = append(attrs, attribute.Int64(observability.AttrGenAIUsageOutputTokens, outputTokens))
+				attrs = append(attrs, attribute.Int64(observability.AttrGenAIResponseCandidatesTokenCount, outputTokens))
+			}
+			if totalTokens > 0 {
+				attrs = append(attrs, attribute.Int64(observability.AttrGenAIUsageTotalTokens, totalTokens))
+			}
+			span.SetAttributes(attrs...)
+		}
+	}
 }
 
 type openAIRequest struct {

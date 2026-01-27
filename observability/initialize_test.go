@@ -66,7 +66,7 @@ func TestSetGlobalTracerProvider(t *testing.T) {
 
 	exporter := tracetest.NewInMemoryExporter()
 	// Just verifies no panic and provider is updated
-	SetGlobalTracerProvider(exporter)
+	SetGlobalTracerProvider(exporter, true)
 
 	// Ensure we can start a span
 	ctx := context.Background()

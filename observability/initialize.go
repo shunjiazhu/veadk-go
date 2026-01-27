@@ -55,27 +55,41 @@ func Init(ctx context.Context) error {
 
 // SetGlobalTracerProvider configures the global OpenTelemetry TracerProvider with the provided exporter.
 // This is optional and used when you want unrelated OTel measurements to also be exported.
-func SetGlobalTracerProvider(exp sdktrace.SpanExporter, spanProcessors ...sdktrace.SpanProcessor) {
+func SetGlobalTracerProvider(exp sdktrace.SpanExporter, enableMetrics bool, spanProcessors ...sdktrace.SpanProcessor) {
+	// Always wrap with ADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
+	translatedExp := &exporter.ADKTranslatedExporter{SpanExporter: exp}
+
+	// 1. Try to register with existing TracerProvider if it's an SDK TracerProvider
+	globalTP := otel.GetTracerProvider()
+	if sdkTP, ok := globalTP.(*sdktrace.TracerProvider); ok {
+		log.Info("Registering SpanEnrichmentProcessor and Exporter to existing global TracerProvider")
+		sdkTP.RegisterSpanProcessor(&SpanEnrichmentProcessor{EnableMetrics: enableMetrics})
+		for _, sp := range spanProcessors {
+			sdkTP.RegisterSpanProcessor(sp)
+		}
+		sdkTP.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(translatedExp))
+		return
+	}
+
+	// 2. Fallback: Overwrite with new TracerProvider
+	log.Info("Overwriting global TracerProvider with new one")
 	opts := []sdktrace.TracerProviderOption{
-		sdktrace.WithSpanProcessor(&SpanEnrichmentProcessor{}),
+		sdktrace.WithSpanProcessor(&SpanEnrichmentProcessor{EnableMetrics: enableMetrics}),
 	}
 	for _, sp := range spanProcessors {
 		opts = append(opts, sdktrace.WithSpanProcessor(sp))
 	}
 
-	// Always wrap with ADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
-	translatedExp := &exporter.ADKTranslatedExporter{SpanExporter: exp}
-
 	tp := sdktrace.NewTracerProvider(
 		append(opts, sdktrace.WithBatcher(translatedExp))...,
 	)
 	otel.SetTracerProvider(tp)
-	log.Info("Registered global TracerProvider with translated exporter")
 }
 
 func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
 	log.Info("Registered SpanEnrichmentProcessor for ADK Local TracerProvider")
-	AddSpanProcessor(&SpanEnrichmentProcessor{})
+	enableMetrics := cfg != nil && (cfg.EnableMeterProvider == nil || *cfg.EnableMeterProvider) && cfg.ApmPlus != nil && cfg.ApmPlus.APIKey != ""
+	AddSpanProcessor(&SpanEnrichmentProcessor{EnableMetrics: enableMetrics})
 
 	if cfg == nil {
 		return nil
@@ -99,7 +113,8 @@ func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) er
 		return err
 	}
 	if globalExp != nil {
-		SetGlobalTracerProvider(globalExp)
+		enableMetrics := cfg != nil && (cfg.EnableMeterProvider == nil || *cfg.EnableMeterProvider) && cfg.ApmPlus != nil && cfg.ApmPlus.APIKey != ""
+		SetGlobalTracerProvider(globalExp, enableMetrics)
 	}
 	return nil
 }

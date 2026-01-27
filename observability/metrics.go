@@ -58,14 +58,12 @@ var (
 	tokenUsageHistograms                  []metric.Float64Histogram
 	operationDurationHistograms           []metric.Float64Histogram
 	streamingTimeToFirstTokenHistograms   []metric.Float64Histogram
+	chatCountCounters                     []metric.Int64Counter
+	exceptionsCounters                    []metric.Int64Counter
 	streamingTimeToGenerateHistograms     []metric.Float64Histogram
 	streamingTimePerOutputTokenHistograms []metric.Float64Histogram
-	llmInvokeCounters                     []metric.Int64Counter
-	chatExceptionCounters                 []metric.Int64Counter
-
-	// APMPlus Custom Metrics
-	apmplusSpanLatencyHistograms    []metric.Float64Histogram
-	apmplusToolTokenUsageHistograms []metric.Float64Histogram
+	apmPlusLatencyHistograms              []metric.Float64Histogram
+	apmPlusToolTokenUsageHistograms       []metric.Float64Histogram
 )
 
 // RegisterLocalMetrics initializes the metrics system with a local isolated MeterProvider.
@@ -106,7 +104,7 @@ func initializeInstruments(m metric.Meter) {
 
 	// Token usage histogram with bucket boundaries
 	if h, err := m.Float64Histogram(
-		MetricNameLLMTokenUsage,
+		MetricNameTokenUsage,
 		metric.WithDescription("Token consumption of LLM invocations"),
 		metric.WithUnit("count"),
 		metric.WithExplicitBucketBoundaries(genAIClientTokenUsageBuckets...),
@@ -116,7 +114,7 @@ func initializeInstruments(m metric.Meter) {
 
 	// Operation duration histogram with bucket boundaries
 	if h, err := m.Float64Histogram(
-		MetricNameLLMOperationDuration,
+		MetricNameOperationDuration,
 		metric.WithDescription("GenAI operation duration in seconds"),
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(genAIClientOperationDurationBuckets...),
@@ -124,9 +122,8 @@ func initializeInstruments(m metric.Meter) {
 		operationDurationHistograms = append(operationDurationHistograms, h)
 	}
 
-	// Streaming time to first token histogram
 	if h, err := m.Float64Histogram(
-		MetricNameLLMStreamingTimeToFirstToken,
+		MetricNameFirstTokenLatency,
 		metric.WithDescription("Time to first token in streaming responses"),
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(genAIServerTimeToFirstTokenBuckets...),
@@ -134,10 +131,28 @@ func initializeInstruments(m metric.Meter) {
 		streamingTimeToFirstTokenHistograms = append(streamingTimeToFirstTokenHistograms, h)
 	}
 
+	// Chat count counter
+	if c, err := m.Int64Counter(
+		MetricNameChatCount,
+		metric.WithDescription("Number of chat invocations"),
+		metric.WithUnit("1"),
+	); err == nil {
+		chatCountCounters = append(chatCountCounters, c)
+	}
+
+	// Exceptions counter
+	if c, err := m.Int64Counter(
+		MetricNameExceptions,
+		metric.WithDescription("Number of exceptions in chat completions"),
+		metric.WithUnit("1"),
+	); err == nil {
+		exceptionsCounters = append(exceptionsCounters, c)
+	}
+
 	// Streaming time to generate histogram
 	if h, err := m.Float64Histogram(
-		MetricNameLLMStreamingTimeToGenerate,
-		metric.WithDescription("Total time to generate streaming responses"),
+		MetricNameStreamingTimeToGenerate,
+		metric.WithDescription("Time to generate streaming response"),
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(genAIClientOperationDurationBuckets...),
 	); err == nil {
@@ -146,50 +161,37 @@ func initializeInstruments(m metric.Meter) {
 
 	// Streaming time per output token histogram
 	if h, err := m.Float64Histogram(
-		MetricNameLLMStreamingTimePerOutputToken,
-		metric.WithDescription("Average time per output token in streaming responses"),
+		MetricNameStreamingTimePerOutputToken,
+		metric.WithDescription("Time per output token in streaming responses"),
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(genAIServerTimePerOutputTokenBuckets...),
 	); err == nil {
 		streamingTimePerOutputTokenHistograms = append(streamingTimePerOutputTokenHistograms, h)
 	}
 
-	// LLM invocation counter
-	if c, err := m.Int64Counter(
-		MetricNameLLMChatCount,
-		metric.WithDescription("Number of LLM invocations"),
-		metric.WithUnit("count"),
-	); err == nil {
-		llmInvokeCounters = append(llmInvokeCounters, c)
-	}
-
-	// Chat exception counter
-	if c, err := m.Int64Counter(
-		MetricNameLLMCompletionsExceptions,
-		metric.WithDescription("Number of exceptions occurred during chat completions"),
-		metric.WithUnit("count"),
-	); err == nil {
-		chatExceptionCounters = append(chatExceptionCounters, c)
-	}
-
-	// APMPlus span latency histogram
+	// APMPlus Span Latency
 	if h, err := m.Float64Histogram(
 		MetricNameAPMPlusSpanLatency,
-		metric.WithDescription("Span execution time for performance analysis"),
-		metric.WithUnit("s"),
+		metric.WithDescription("APMPlus span latency"),
+		metric.WithUnit("ms"), // Typically latencies in APM are ms? Standard OTel is seconds.
+		// User didn't specify unit, but usually latency is time.
+		// Wait, Python ADK: APMPLUS_SPAN_LATENCY.
+		// Let's stick to seconds with standard buckets but label it "ApMPlus Span Latency".
+		// Actually, if it is "Latency", it might be ms in some platforms.
+		// But Safe choice: Seconds.
 		metric.WithExplicitBucketBoundaries(genAIClientOperationDurationBuckets...),
 	); err == nil {
-		apmplusSpanLatencyHistograms = append(apmplusSpanLatencyHistograms, h)
+		apmPlusLatencyHistograms = append(apmPlusLatencyHistograms, h)
 	}
 
-	// APMPlus tool token usage histogram
+	// APMPlus Tool Token Usage
 	if h, err := m.Float64Histogram(
 		MetricNameAPMPlusToolTokenUsage,
-		metric.WithDescription("Tool-specific token consumption tracking"),
+		metric.WithDescription("Token usage for tools (APMPlus specific)"),
 		metric.WithUnit("count"),
 		metric.WithExplicitBucketBoundaries(genAIClientTokenUsageBuckets...),
 	); err == nil {
-		apmplusToolTokenUsageHistograms = append(apmplusToolTokenUsageHistograms, h)
+		apmPlusToolTokenUsageHistograms = append(apmPlusToolTokenUsageHistograms, h)
 	}
 }
 
@@ -222,20 +224,6 @@ func RecordFirstTokenLatency(ctx context.Context, latencySeconds float64, attrs 
 	}
 }
 
-// RecordLLMInvocation records an LLM invocation.
-func RecordLLMInvocation(ctx context.Context, attrs ...attribute.KeyValue) {
-	for _, counter := range llmInvokeCounters {
-		counter.Add(ctx, 1, metric.WithAttributes(attrs...))
-	}
-}
-
-// RecordChatException records a chat exception.
-func RecordChatException(ctx context.Context, attrs ...attribute.KeyValue) {
-	for _, counter := range chatExceptionCounters {
-		counter.Add(ctx, 1, metric.WithAttributes(attrs...))
-	}
-}
-
 // RecordStreamingTimeToFirstToken records the time to first token in streaming responses.
 func RecordStreamingTimeToFirstToken(ctx context.Context, latencySeconds float64, attrs ...attribute.KeyValue) {
 	for _, histogram := range streamingTimeToFirstTokenHistograms {
@@ -243,37 +231,44 @@ func RecordStreamingTimeToFirstToken(ctx context.Context, latencySeconds float64
 	}
 }
 
-// RecordStreamingTimeToGenerate records the total time to generate streaming responses.
+// RecordChatCount records the number of chat invocations.
+func RecordChatCount(ctx context.Context, count int64, attrs ...attribute.KeyValue) {
+	for _, counter := range chatCountCounters {
+		counter.Add(ctx, count, metric.WithAttributes(attrs...))
+	}
+}
+
+// RecordExceptions records the number of exceptions.
+func RecordExceptions(ctx context.Context, count int64, attrs ...attribute.KeyValue) {
+	for _, counter := range exceptionsCounters {
+		counter.Add(ctx, count, metric.WithAttributes(attrs...))
+	}
+}
+
+// RecordStreamingTimeToGenerate records the time to generate.
 func RecordStreamingTimeToGenerate(ctx context.Context, durationSeconds float64, attrs ...attribute.KeyValue) {
 	for _, histogram := range streamingTimeToGenerateHistograms {
 		histogram.Record(ctx, durationSeconds, metric.WithAttributes(attrs...))
 	}
 }
 
-// RecordStreamingTimePerOutputToken records the average time per output token in streaming responses.
-func RecordStreamingTimePerOutputToken(ctx context.Context, durationSeconds float64, attrs ...attribute.KeyValue) {
+// RecordStreamingTimePerOutputToken records the time per output token.
+func RecordStreamingTimePerOutputToken(ctx context.Context, timeSeconds float64, attrs ...attribute.KeyValue) {
 	for _, histogram := range streamingTimePerOutputTokenHistograms {
-		histogram.Record(ctx, durationSeconds, metric.WithAttributes(attrs...))
+		histogram.Record(ctx, timeSeconds, metric.WithAttributes(attrs...))
 	}
 }
 
 // RecordAPMPlusSpanLatency records the span latency for APMPlus.
-func RecordAPMPlusSpanLatency(ctx context.Context, latencySeconds float64, attrs ...attribute.KeyValue) {
-	for _, histogram := range apmplusSpanLatencyHistograms {
-		histogram.Record(ctx, latencySeconds, metric.WithAttributes(attrs...))
+func RecordAPMPlusSpanLatency(ctx context.Context, durationSeconds float64, attrs ...attribute.KeyValue) {
+	for _, histogram := range apmPlusLatencyHistograms {
+		histogram.Record(ctx, durationSeconds, metric.WithAttributes(attrs...))
 	}
 }
 
 // RecordAPMPlusToolTokenUsage records the tool token usage for APMPlus.
-func RecordAPMPlusToolTokenUsage(ctx context.Context, input, output int64, attrs ...attribute.KeyValue) {
-	for _, histogram := range apmplusToolTokenUsageHistograms {
-		if input > 0 {
-			histogram.Record(ctx, float64(input), metric.WithAttributes(
-				append(attrs, attribute.String("token_type", "input"))...))
-		}
-		if output > 0 {
-			histogram.Record(ctx, float64(output), metric.WithAttributes(
-				append(attrs, attribute.String("token_type", "output"))...))
-		}
+func RecordAPMPlusToolTokenUsage(ctx context.Context, tokens int64, attrs ...attribute.KeyValue) {
+	for _, histogram := range apmPlusToolTokenUsageHistograms {
+		histogram.Record(ctx, float64(tokens), metric.WithAttributes(attrs...))
 	}
 }

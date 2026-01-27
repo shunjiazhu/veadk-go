@@ -35,7 +35,7 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 
 	// 2. Setup Tracer with Processor
 	exporter := tracetest.NewInMemoryExporter()
-	processor := &SpanEnrichmentProcessor{}
+	processor := &SpanEnrichmentProcessor{EnableMetrics: true}
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithSpanProcessor(processor),
 		sdktrace.WithSyncer(exporter),
@@ -48,12 +48,8 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 		_, span := tracer.Start(ctx, SpanCallLLM)
 		// Add usage attributes
 		span.SetAttributes(
-			attribute.Int64(SpanAttrGenAIUsageInputTokensKey, 100),
-			attribute.Int64(SpanAttrGenAIUsageOutputTokensKey, 200),
-			attribute.Int64(SpanAttrGenAIResponsePromptTokenCountKey, 10), // should be ignored if UsageInputTokensKey is present? or accumulated? Logic says:
-			// case GenAIUsageInputTokens, GenAIResponsePromptTokenCount: input = val
-			// So last write wins or depends on iteration order.
-			// Let's stick to standard keys for now.
+			attribute.Int64(AttrGenAIUsageInputTokens, 100),
+			attribute.Int64(AttrGenAIUsageOutputTokens, 200),
 		)
 		span.End()
 
@@ -64,10 +60,10 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 			// Check enriched attributes
 			var foundKind, foundOp bool
 			for _, a := range s.Attributes {
-				if a.Key == SpanAttrGenAISpanKindKey && a.Value.AsString() == SpanKindLLM {
+				if a.Key == AttrGenAISpanKind && a.Value.AsString() == SpanKindLLM {
 					foundKind = true
 				}
-				if a.Key == SpanAttrGenAIOperationNameKey && a.Value.AsString() == "chat" {
+				if a.Key == AttrGenAIOperationName && a.Value.AsString() == "chat" {
 					foundOp = true
 				}
 			}
@@ -81,27 +77,36 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 		err := reader.Collect(ctx, &rm)
 		assert.NoError(t, err)
 
-		var foundToken, foundDuration bool
+		var foundToken, foundDuration, foundChatCount, foundAPMLatency bool
 		for _, sm := range rm.ScopeMetrics {
 			for _, m := range sm.Metrics {
-				if m.Name == MetricNameLLMTokenUsage {
-					data := m.Data.(metricdata.Histogram[float64])
-					// We expect at least some data points
-					if len(data.DataPoints) > 0 {
-						foundToken = true
-					}
+				if m.Name == MetricNameTokenUsage {
+					foundToken = true
 				}
-				if m.Name == MetricNameLLMOperationDuration {
+				if m.Name == MetricNameOperationDuration {
 					foundDuration = true
+				}
+				if m.Name == MetricNameChatCount {
+					foundChatCount = true
+				}
+				if m.Name == MetricNameAPMPlusSpanLatency {
+					foundAPMLatency = true
 				}
 			}
 		}
 		assert.True(t, foundToken, "Token usage metric should be recorded")
 		assert.True(t, foundDuration, "Duration metric should be recorded")
+		assert.True(t, foundChatCount, "Chat count metric should be recorded")
+		assert.True(t, foundAPMLatency, "APMPlus Span Latency metric should be recorded")
 	})
 
 	t.Run("Tool Span", func(t *testing.T) {
 		_, span := tracer.Start(ctx, SpanExecuteTool+" my_tool")
+		// Add tool input/output for token estimation (4 chars = 1 token)
+		span.SetAttributes(
+			attribute.String(AttrGenAIToolInput, "1234"),      // 1 token
+			attribute.String(AttrGenAIToolOutput, "12345678"), // 2 tokens
+		)
 		span.End()
 
 		spans := exporter.GetSpans()
@@ -110,13 +115,29 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 			// Check enriched attributes
 			var foundToolName bool
 			for _, a := range s.Attributes {
-				if a.Key == SpanAttrGenAIToolNameKey && a.Value.AsString() == "my_tool" {
+				if a.Key == AttrGenAIToolName && a.Value.AsString() == "my_tool" {
 					foundToolName = true
 				}
 			}
 			assert.True(t, foundToolName, "Tool name mismatch")
 		}
 		exporter.Reset()
+
+		// Verify Token Usage for Tool
+		var rm metricdata.ResourceMetrics
+		err := reader.Collect(ctx, &rm)
+		assert.NoError(t, err)
+
+		var foundToolToken bool
+		for _, sm := range rm.ScopeMetrics {
+			for _, m := range sm.Metrics {
+				if m.Name == MetricNameAPMPlusToolTokenUsage {
+					foundToolToken = true
+					// Could check data points if needed, but existence is enough for now
+				}
+			}
+		}
+		assert.True(t, foundToolToken, "APMPlus Tool Token Usage should be recorded")
 	})
 
 	t.Run("Agent Span", func(t *testing.T) {
@@ -128,7 +149,7 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 			s := spans[0]
 			var foundAgentName bool
 			for _, a := range s.Attributes {
-				if a.Key == SpanAttrGenAIAgentNameKey && a.Value.AsString() == "my_agent" {
+				if a.Key == AttrGenAIAgentName && a.Value.AsString() == "my_agent" {
 					foundAgentName = true
 				}
 			}

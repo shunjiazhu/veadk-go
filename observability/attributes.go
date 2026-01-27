@@ -17,7 +17,6 @@ package observability
 import (
 	"context"
 	"os"
-	"runtime/debug"
 
 	"github.com/volcengine/veadk-go/configs"
 	"go.opentelemetry.io/otel/attribute"
@@ -27,17 +26,17 @@ import (
 // SetCommonAttributes enriches the span with common attributes from context, config, or env.
 func SetCommonAttributes(ctx context.Context, span trace.Span) {
 	// 1. Fixed attributes
-	span.SetAttributes(attribute.String(CozeloopReportSourceKey, DefaultCozeLoopReportSource))
+	span.SetAttributes(attribute.String(AttrCozeloopReportSource, DefaultCozeLoopReportSource))
 
 	// 2. Dynamic attributes
-	setDynamicAttribute(span, SpanAttrGenAISystemKey, GetModelProvider(ctx), FallbackModelProvider)
-	setDynamicAttribute(span, SpanAttrGenAISystemVersionKey, Version, "", InstrumentationKey)
-	setDynamicAttribute(span, CozeloopCallTypeKey, GetCallType(ctx), DefaultCozeLoopCallType)
-	setDynamicAttribute(span, SpanAttrGenAISessionIdKey, GetSessionId(ctx), FallbackSessionID, SpanAttrSessionIdDotKey)
-	setDynamicAttribute(span, SpanAttrGenAIUserIdKey, GetUserId(ctx), FallbackUserID, SpanAttrUserIdDotKey)
-	setDynamicAttribute(span, SpanAttrGenAIAppNameKey, GetAppName(ctx), FallbackAppName, SpanAttrAppNameUnderlineKey, SpanAttrAppNameDotKey)
-	setDynamicAttribute(span, SpanAttrGenAIAgentNameKey, GetAgentName(ctx), FallbackAgentName, SpanAttrAgentNameKey, SpanAttrAgentNameDotKey)
-	setDynamicAttribute(span, SpanAttrGenAIInvocationIdKey, GetInvocationId(ctx), FallbackInvocationID, SpanAttrInvocationIdDotKey)
+	setDynamicAttribute(span, AttrGenAISystem, GetModelProvider(ctx), FallbackModelProvider)
+	setDynamicAttribute(span, AttrGenAISystemVersion, Version, "", AttrInstrumentation)
+	setDynamicAttribute(span, AttrCozeloopCallType, GetCallType(ctx), DefaultCozeLoopCallType)
+	setDynamicAttribute(span, AttrGenAISessionId, GetSessionId(ctx), FallbackSessionID, AttrSessionId)
+	setDynamicAttribute(span, AttrGenAIUserId, GetUserId(ctx), FallbackUserID, AttrUserId)
+	setDynamicAttribute(span, AttrGenAIAppName, GetAppName(ctx), FallbackAppName, AttrAppNameUnderline, AttrAppNameDot)
+	setDynamicAttribute(span, AttrGenAIAgentName, GetAgentName(ctx), FallbackAgentName, AttrAgentName, AttrAgentNameDot)
+	setDynamicAttribute(span, AttrGenAIInvocationId, GetInvocationId(ctx), FallbackInvocationID, AttrInvocationId)
 }
 
 // setDynamicAttribute sets an attribute and its aliases if the value is not empty (or falls back to a default).
@@ -57,34 +56,34 @@ func setDynamicAttribute(span trace.Span, key string, val string, fallback strin
 // SetLLMAttributes sets standard GenAI attributes for LLM spans.
 func SetLLMAttributes(span trace.Span) {
 	span.SetAttributes(
-		attribute.String(SpanAttrGenAISpanKindKey, SpanKindLLM),
-		attribute.String(SpanAttrGenAIOperationNameKey, "chat"),
+		attribute.String(AttrGenAISpanKind, SpanKindLLM),
+		attribute.String(AttrGenAIOperationName, "chat"),
 	)
 }
 
 // SetToolAttributes sets standard GenAI attributes for Tool spans.
 func SetToolAttributes(span trace.Span, name string) {
 	span.SetAttributes(
-		attribute.String(SpanAttrGenAISpanKindKey, SpanKindTool),
-		attribute.String(SpanAttrGenAIOperationNameKey, "execute_tool"),
-		attribute.String(SpanAttrGenAIToolNameKey, name),
+		attribute.String(AttrGenAISpanKind, SpanKindTool),
+		attribute.String(AttrGenAIOperationName, "execute_tool"),
+		attribute.String(AttrGenAIToolName, name),
 	)
 }
 
 // SetAgentAttributes sets standard GenAI attributes for Agent spans.
 func SetAgentAttributes(span trace.Span, name string) {
 	span.SetAttributes(
-		attribute.String(SpanAttrGenAIAgentNameKey, name),
-		attribute.String(SpanAttrAgentNameKey, name),    // Alias: agent_name
-		attribute.String(SpanAttrAgentNameDotKey, name), // Alias: agent.name
+		attribute.String(AttrGenAIAgentName, name),
+		attribute.String(AttrAgentName, name),    // Alias: agent_name
+		attribute.String(AttrAgentNameDot, name), // Alias: agent.name
 	)
 }
 
 // SetWorkflowAttributes sets standard GenAI attributes for Workflow/Root spans.
 func SetWorkflowAttributes(span trace.Span) {
 	span.SetAttributes(
-		attribute.String(SpanAttrGenAISpanKindKey, SpanKindWorkflow),
-		attribute.String(SpanAttrGenAIOperationNameKey, "chain"),
+		attribute.String(AttrGenAISpanKind, SpanKindWorkflow),
+		attribute.String(AttrGenAIOperationName, "chain"),
 	)
 }
 
@@ -213,23 +212,4 @@ func getServiceName(cfg *configs.OpenTelemetryConfig) string {
 		}
 	}
 	return "<unknown_service>"
-}
-
-var (
-	Version = getVersion()
-)
-
-func getVersion() string {
-	if info, ok := debug.ReadBuildInfo(); ok {
-		for _, dep := range info.Deps {
-			if dep.Path == InstrumentationName && dep.Version != "" {
-				return dep.Version
-			}
-		}
-		// If linked as main module or not found in deps
-		if info.Main.Path == InstrumentationName && info.Main.Version != "" {
-			return info.Main.Version
-		}
-	}
-	return DefaultVersion
 }
