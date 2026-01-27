@@ -22,7 +22,9 @@ import (
 
 const (
 	// Global
+	EnvObservabilityEnableLocalProvider  = "OBSERVABILITY_OPENTELEMETRY_ENABLE_LOCAL_PROVIDER"
 	EnvObservabilityEnableGlobalProvider = "OBSERVABILITY_OPENTELEMETRY_ENABLE_GLOBAL_PROVIDER"
+	EnvObservabilityEnableMeterProvider  = "OBSERVABILITY_OPENTELEMETRY_ENABLE_METER_PROVIDER"
 	EnvOtelServiceName                   = "OTEL_SERVICE_NAME"
 
 	// APMPlus
@@ -56,12 +58,15 @@ type ObservabilityConfig struct {
 }
 
 type OpenTelemetryConfig struct {
-	EnableGlobalProvider bool               `yaml:"enable_global_tracer"`
-	ApmPlus              *ApmPlusConfig     `yaml:"apmplus"`
-	CozeLoop             *CozeLoopConfig    `yaml:"cozeloop"`
-	TLS                  *TLSExporterConfig `yaml:"tls"`
-	Stdout               *StdoutConfig      `yaml:"stdout"`
-	File                 *FileConfig        `yaml:"file"`
+	EnableLocalProvider  bool  `yaml:"enable_local_tracer"`
+	EnableGlobalProvider bool  `yaml:"enable_global_tracer"`
+	EnableMeterProvider  *bool `yaml:"enable_meter_provider"`
+
+	ApmPlus  *ApmPlusConfig     `yaml:"apmplus"`
+	CozeLoop *CozeLoopConfig    `yaml:"cozeloop"`
+	TLS      *TLSExporterConfig `yaml:"tls"`
+	Stdout   *StdoutConfig      `yaml:"stdout"`
+	File     *FileConfig        `yaml:"file"`
 }
 
 type ApmPlusConfig struct {
@@ -105,7 +110,13 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 			ot.ApmPlus = &ApmPlusConfig{}
 		}
 		ot.ApmPlus.Endpoint = v
+
+		if ot.EnableMeterProvider == nil {
+			ot.EnableMeterProvider = new(bool)
+			*ot.EnableMeterProvider = true
+		}
 	}
+
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryApmPlusAPIKey); v != "" {
 		if ot.ApmPlus == nil {
 			ot.ApmPlus = &ApmPlusConfig{}
@@ -207,5 +218,18 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 	// Global Tracer
 	if v := utils.GetEnvWithDefault(EnvObservabilityEnableGlobalProvider); v != "" {
 		ot.EnableGlobalProvider = v == "true"
+	}
+
+	// Local Tracer
+	if v := utils.GetEnvWithDefault(EnvObservabilityEnableLocalProvider); v != "" {
+		ot.EnableLocalProvider = v == "true"
+	}
+
+	// Meter Provider
+	if v := utils.GetEnvWithDefault(EnvObservabilityEnableMeterProvider); v != "" {
+		if ot.EnableMeterProvider == nil {
+			ot.EnableMeterProvider = new(bool)
+		}
+		*ot.EnableMeterProvider = v == "true"
 	}
 }

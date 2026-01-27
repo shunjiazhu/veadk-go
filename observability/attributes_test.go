@@ -93,46 +93,46 @@ func TestSetCommonAttributes(t *testing.T) {
 	assert.Equal(t, DefaultCozeLoopReportSource, span.Attributes[attribute.Key(CozeloopReportSourceKey)].AsString())
 
 	// Check dynamic attributes
-	assert.Equal(t, "doubao", span.Attributes[attribute.Key(GenAISystemKey)].AsString())
-	assert.Equal(t, Version, span.Attributes[attribute.Key(GenAISystemVersionKey)].AsString())
+	assert.Equal(t, "doubao", span.Attributes[attribute.Key(SpanAttrGenAISystemKey)].AsString())
+	assert.Equal(t, Version, span.Attributes[attribute.Key(SpanAttrGenAISystemVersionKey)].AsString())
 	assert.Equal(t, Version, span.Attributes[attribute.Key(InstrumentationKey)].AsString())
 
 	// Check aliases
-	assert.Equal(t, "my-app", span.Attributes[attribute.Key(GenAIAppNameKey)].AsString())
-	assert.Equal(t, "my-app", span.Attributes[attribute.Key(AppNameUnderlineKey)].AsString())
-	assert.Equal(t, "my-app", span.Attributes[attribute.Key(AppNameDotKey)].AsString())
+	assert.Equal(t, "my-app", span.Attributes[attribute.Key(SpanAttrGenAIAppNameKey)].AsString())
+	assert.Equal(t, "my-app", span.Attributes[attribute.Key(SpanAttrAppNameUnderlineKey)].AsString())
+	assert.Equal(t, "my-app", span.Attributes[attribute.Key(SpanAttrAppNameDotKey)].AsString())
 
-	assert.Equal(t, "u123", span.Attributes[attribute.Key(GenAIUserIdKey)].AsString())
-	assert.Equal(t, "u123", span.Attributes[attribute.Key(UserIdDotKey)].AsString())
+	assert.Equal(t, "u123", span.Attributes[attribute.Key(SpanAttrGenAIUserIdKey)].AsString())
+	assert.Equal(t, "u123", span.Attributes[attribute.Key(SpanAttrUserIdDotKey)].AsString())
 
-	assert.Equal(t, "s456", span.Attributes[attribute.Key(GenAISessionIdKey)].AsString())
-	assert.Equal(t, "s456", span.Attributes[attribute.Key(SessionIdDotKey)].AsString())
+	assert.Equal(t, "s456", span.Attributes[attribute.Key(SpanAttrGenAISessionIdKey)].AsString())
+	assert.Equal(t, "s456", span.Attributes[attribute.Key(SpanAttrSessionIdDotKey)].AsString())
 
-	assert.Equal(t, "inv789", span.Attributes[attribute.Key(GenAIInvocationIdKey)].AsString())
-	assert.Equal(t, "inv789", span.Attributes[attribute.Key(InvocationIdDotKey)].AsString())
+	assert.Equal(t, "inv789", span.Attributes[attribute.Key(SpanAttrGenAIInvocationIdKey)].AsString())
+	assert.Equal(t, "inv789", span.Attributes[attribute.Key(SpanAttrInvocationIdDotKey)].AsString())
 }
 
 func TestSetSpecificAttributes(t *testing.T) {
 	t.Run("LLM", func(t *testing.T) {
 		span := NewMockSpan()
 		SetLLMAttributes(span)
-		assert.Equal(t, SpanKindLLM, span.Attributes[attribute.Key(GenAISpanKindKey)].AsString())
-		assert.Equal(t, "chat", span.Attributes[attribute.Key(GenAIOperationNameKey)].AsString())
+		assert.Equal(t, SpanKindLLM, span.Attributes[attribute.Key(SpanAttrGenAISpanKindKey)].AsString())
+		assert.Equal(t, "chat", span.Attributes[attribute.Key(SpanAttrGenAIOperationNameKey)].AsString())
 	})
 
 	t.Run("Tool", func(t *testing.T) {
 		span := NewMockSpan()
 		SetToolAttributes(span, "my-tool")
-		assert.Equal(t, SpanKindTool, span.Attributes[attribute.Key(GenAISpanKindKey)].AsString())
-		assert.Equal(t, "execute_tool", span.Attributes[attribute.Key(GenAIOperationNameKey)].AsString())
-		assert.Equal(t, "my-tool", span.Attributes[attribute.Key(GenAIToolNameKey)].AsString())
+		assert.Equal(t, SpanKindTool, span.Attributes[attribute.Key(SpanAttrGenAISpanKindKey)].AsString())
+		assert.Equal(t, "execute_tool", span.Attributes[attribute.Key(SpanAttrGenAIOperationNameKey)].AsString())
+		assert.Equal(t, "my-tool", span.Attributes[attribute.Key(SpanAttrGenAIToolNameKey)].AsString())
 	})
 
 	t.Run("Agent", func(t *testing.T) {
 		span := NewMockSpan()
 		SetAgentAttributes(span, "my-agent")
-		assert.Equal(t, "my-agent", span.Attributes[attribute.Key(GenAIAgentNameKey)].AsString())
-		assert.Equal(t, "my-agent", span.Attributes[attribute.Key(AgentNameKey)].AsString())
-		assert.Equal(t, "my-agent", span.Attributes[attribute.Key(AgentNameDotKey)].AsString())
+		assert.Equal(t, "my-agent", span.Attributes[attribute.Key(SpanAttrGenAIAgentNameKey)].AsString())
+		assert.Equal(t, "my-agent", span.Attributes[attribute.Key(SpanAttrAgentNameKey)].AsString())
+		assert.Equal(t, "my-agent", span.Attributes[attribute.Key(SpanAttrAgentNameDotKey)].AsString())
 	})
 }

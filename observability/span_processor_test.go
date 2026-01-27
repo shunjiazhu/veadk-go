@@ -48,9 +48,9 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 		_, span := tracer.Start(ctx, SpanCallLLM)
 		// Add usage attributes
 		span.SetAttributes(
-			attribute.Int64(GenAIUsageInputTokensKey, 100),
-			attribute.Int64(GenAIUsageOutputTokensKey, 200),
-			attribute.Int64(GenAIResponsePromptTokenCountKey, 10), // should be ignored if UsageInputTokensKey is present? or accumulated? Logic says:
+			attribute.Int64(SpanAttrGenAIUsageInputTokensKey, 100),
+			attribute.Int64(SpanAttrGenAIUsageOutputTokensKey, 200),
+			attribute.Int64(SpanAttrGenAIResponsePromptTokenCountKey, 10), // should be ignored if UsageInputTokensKey is present? or accumulated? Logic says:
 			// case GenAIUsageInputTokens, GenAIResponsePromptTokenCount: input = val
 			// So last write wins or depends on iteration order.
 			// Let's stick to standard keys for now.
@@ -64,10 +64,10 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 			// Check enriched attributes
 			var foundKind, foundOp bool
 			for _, a := range s.Attributes {
-				if a.Key == GenAISpanKindKey && a.Value.AsString() == SpanKindLLM {
+				if a.Key == SpanAttrGenAISpanKindKey && a.Value.AsString() == SpanKindLLM {
 					foundKind = true
 				}
-				if a.Key == GenAIOperationNameKey && a.Value.AsString() == "chat" {
+				if a.Key == SpanAttrGenAIOperationNameKey && a.Value.AsString() == "chat" {
 					foundOp = true
 				}
 			}
@@ -110,7 +110,7 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 			// Check enriched attributes
 			var foundToolName bool
 			for _, a := range s.Attributes {
-				if a.Key == GenAIToolNameKey && a.Value.AsString() == "my_tool" {
+				if a.Key == SpanAttrGenAIToolNameKey && a.Value.AsString() == "my_tool" {
 					foundToolName = true
 				}
 			}
@@ -128,7 +128,7 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 			s := spans[0]
 			var foundAgentName bool
 			for _, a := range s.Attributes {
-				if a.Key == GenAIAgentNameKey && a.Value.AsString() == "my_agent" {
+				if a.Key == SpanAttrGenAIAgentNameKey && a.Value.AsString() == "my_agent" {
 					foundAgentName = true
 				}
 			}

@@ -65,9 +65,9 @@ func (p *SpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 	var modelName string
 	for _, kv := range attrs {
 		// Map specific trace attributes to metric dimensions
-		if kv.Key == GenAIRequestModelKey {
+		if kv.Key == SpanAttrGenAIRequestModelKey {
 			modelName = kv.Value.AsString()
-			metricAttrs = append(metricAttrs, attribute.String(GenAIRequestModelKey, modelName))
+			metricAttrs = append(metricAttrs, attribute.String(MetricAttrGenAIRequestModelKey, modelName))
 		}
 	}
 
@@ -105,9 +105,9 @@ func (p *SpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 		var input, output int64
 		for _, kv := range attrs {
 			switch kv.Key {
-			case GenAIUsageInputTokensKey, GenAIResponsePromptTokenCountKey:
+			case SpanAttrGenAIUsageInputTokensKey, SpanAttrGenAIResponsePromptTokenCountKey:
 				input = kv.Value.AsInt64()
-			case GenAIUsageOutputTokensKey, GenAIResponseCandidatesTokenCountKey:
+			case SpanAttrGenAIUsageOutputTokensKey, SpanAttrGenAIResponseCandidatesTokenCountKey:
 				output = kv.Value.AsInt64()
 			}
 		}
@@ -141,17 +141,14 @@ func (p *SpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 
 		// Estimate tool token usage based on text length (like Python does)
 		var toolInput, toolOutput string
-		found := 0
 		for _, kv := range attrs {
 			switch kv.Key {
-			case "gen_ai.tool.input":
+			case SpanAttrGenAIToolInputKey:
 				toolInput = kv.Value.AsString()
-				found++
-			case "gen_ai.tool.output":
+			case SpanAttrGenAIToolOutputKey:
 				toolOutput = kv.Value.AsString()
-				found++
 			}
-			if found == 2 {
+			if toolInput != "" && toolOutput != "" {
 				break
 			}
 		}

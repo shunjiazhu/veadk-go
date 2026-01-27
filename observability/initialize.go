@@ -17,7 +17,6 @@ package observability
 import (
 	"context"
 	"errors"
-	"os"
 
 	"github.com/volcengine/veadk-go/configs"
 	"github.com/volcengine/veadk-go/log"
@@ -107,13 +106,15 @@ func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) er
 
 func initializeTraceProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
 	var errs []error
-	err := setupLocalTracer(ctx, cfg)
-	if err != nil {
-		errs = append(errs, err)
+	if cfg == nil || !cfg.EnableLocalProvider {
+		err := setupLocalTracer(ctx, cfg)
+		if err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	if cfg != nil && cfg.EnableGlobalProvider {
-		err = setupGlobalTracer(ctx, cfg)
+		err := setupGlobalTracer(ctx, cfg)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -122,23 +123,28 @@ func initializeTraceProvider(ctx context.Context, cfg *configs.OpenTelemetryConf
 }
 
 func initializeMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	if cfg == nil {
+	var errs []error
+	if cfg == nil || cfg.EnableMeterProvider == nil || !*cfg.EnableMeterProvider {
+		log.Info("Meter provider is not enabled")
 		return nil
 	}
-	readers, err := exporter.NewMetricReader(ctx, cfg)
-	if err != nil {
-		return err
+
+	if cfg != nil && cfg.EnableLocalProvider {
+		readers, err := exporter.NewMetricReader(ctx, cfg)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		RegisterLocalMetrics(readers)
 	}
-	RegisterLocalMetrics(readers)
 
 	if cfg.EnableGlobalProvider {
 		globalReaders, err := exporter.NewMetricReader(ctx, cfg)
 		if err != nil {
-			return err
+			errs = append(errs, err)
 		}
 		RegisterGlobalMetrics(globalReaders)
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // InitializeWithConfig automatically initializes the observability system based on the provided configuration.
@@ -156,29 +162,4 @@ func InitializeWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig)
 	}
 
 	return errors.Join(errs...)
-}
-
-func getServiceName(cfg *configs.OpenTelemetryConfig) string {
-	if serviceFromEnv := os.Getenv("OTEL_SERVICE_NAME"); serviceFromEnv != "" {
-		return serviceFromEnv
-	}
-
-	if cfg.ApmPlus != nil {
-		if cfg.ApmPlus.ServiceName != "" {
-			return cfg.ApmPlus.ServiceName
-		}
-	}
-
-	if cfg.CozeLoop != nil {
-		if cfg.CozeLoop.ServiceName != "" {
-			return cfg.CozeLoop.ServiceName
-		}
-	}
-
-	if cfg.TLS != nil {
-		if cfg.TLS.ServiceName != "" {
-			return cfg.TLS.ServiceName
-		}
-	}
-	return "<unknown_service>"
 }

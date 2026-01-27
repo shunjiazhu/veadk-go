@@ -82,7 +82,10 @@ func SetupVeADKConfig() error {
 			Mem0:       &Mem0Config{},
 		},
 		Observability: &ObservabilityConfig{
-			OpenTelemetry: &OpenTelemetryConfig{},
+			OpenTelemetry: &OpenTelemetryConfig{
+				EnableGlobalProvider: true,  // use global trace provider by default, like veadk-python
+				EnableLocalProvider:  false, // disable adk-go's local provider
+			},
 		},
 	}
 	globalConfig.Model.MapEnvToConfig()

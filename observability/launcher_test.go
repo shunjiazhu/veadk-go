@@ -61,10 +61,10 @@ func TestObservedLauncher(t *testing.T) {
 		// Verify attributes propagated
 		var foundUser, foundSession bool
 		for _, a := range s.Attributes {
-			if a.Key == GenAIUserIdKey && a.Value.AsString() == "user-1" {
+			if a.Key == SpanAttrGenAIUserIdKey && a.Value.AsString() == "user-1" {
 				foundUser = true
 			}
-			if a.Key == GenAISessionIdKey && a.Value.AsString() == "session-1" {
+			if a.Key == SpanAttrGenAISessionIdKey && a.Value.AsString() == "session-1" {
 				foundSession = true
 			}
 		}

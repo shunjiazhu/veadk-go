@@ -17,6 +17,7 @@ package observability
 import (
 	"context"
 	"os"
+	"runtime/debug"
 
 	"github.com/volcengine/veadk-go/configs"
 	"go.opentelemetry.io/otel/attribute"
@@ -29,14 +30,14 @@ func SetCommonAttributes(ctx context.Context, span trace.Span) {
 	span.SetAttributes(attribute.String(CozeloopReportSourceKey, DefaultCozeLoopReportSource))
 
 	// 2. Dynamic attributes
-	setDynamicAttribute(span, GenAISystemKey, GetModelProvider(ctx), FallbackModelProvider)
-	setDynamicAttribute(span, GenAISystemVersionKey, Version, "", InstrumentationKey)
+	setDynamicAttribute(span, SpanAttrGenAISystemKey, GetModelProvider(ctx), FallbackModelProvider)
+	setDynamicAttribute(span, SpanAttrGenAISystemVersionKey, Version, "", InstrumentationKey)
 	setDynamicAttribute(span, CozeloopCallTypeKey, GetCallType(ctx), DefaultCozeLoopCallType)
-	setDynamicAttribute(span, GenAISessionIdKey, GetSessionId(ctx), FallbackSessionID, SessionIdDotKey)
-	setDynamicAttribute(span, GenAIUserIdKey, GetUserId(ctx), FallbackUserID, UserIdDotKey)
-	setDynamicAttribute(span, GenAIAppNameKey, GetAppName(ctx), FallbackAppName, AppNameUnderlineKey, AppNameDotKey)
-	setDynamicAttribute(span, GenAIAgentNameKey, GetAgentName(ctx), FallbackAgentName, AgentNameKey, AgentNameDotKey)
-	setDynamicAttribute(span, GenAIInvocationIdKey, GetInvocationId(ctx), FallbackInvocationID, InvocationIdDotKey)
+	setDynamicAttribute(span, SpanAttrGenAISessionIdKey, GetSessionId(ctx), FallbackSessionID, SpanAttrSessionIdDotKey)
+	setDynamicAttribute(span, SpanAttrGenAIUserIdKey, GetUserId(ctx), FallbackUserID, SpanAttrUserIdDotKey)
+	setDynamicAttribute(span, SpanAttrGenAIAppNameKey, GetAppName(ctx), FallbackAppName, SpanAttrAppNameUnderlineKey, SpanAttrAppNameDotKey)
+	setDynamicAttribute(span, SpanAttrGenAIAgentNameKey, GetAgentName(ctx), FallbackAgentName, SpanAttrAgentNameKey, SpanAttrAgentNameDotKey)
+	setDynamicAttribute(span, SpanAttrGenAIInvocationIdKey, GetInvocationId(ctx), FallbackInvocationID, SpanAttrInvocationIdDotKey)
 }
 
 // setDynamicAttribute sets an attribute and its aliases if the value is not empty (or falls back to a default).
@@ -56,34 +57,34 @@ func setDynamicAttribute(span trace.Span, key string, val string, fallback strin
 // SetLLMAttributes sets standard GenAI attributes for LLM spans.
 func SetLLMAttributes(span trace.Span) {
 	span.SetAttributes(
-		attribute.String(GenAISpanKindKey, SpanKindLLM),
-		attribute.String(GenAIOperationNameKey, "chat"),
+		attribute.String(SpanAttrGenAISpanKindKey, SpanKindLLM),
+		attribute.String(SpanAttrGenAIOperationNameKey, "chat"),
 	)
 }
 
 // SetToolAttributes sets standard GenAI attributes for Tool spans.
 func SetToolAttributes(span trace.Span, name string) {
 	span.SetAttributes(
-		attribute.String(GenAISpanKindKey, SpanKindTool),
-		attribute.String(GenAIOperationNameKey, "execute_tool"),
-		attribute.String(GenAIToolNameKey, name),
+		attribute.String(SpanAttrGenAISpanKindKey, SpanKindTool),
+		attribute.String(SpanAttrGenAIOperationNameKey, "execute_tool"),
+		attribute.String(SpanAttrGenAIToolNameKey, name),
 	)
 }
 
 // SetAgentAttributes sets standard GenAI attributes for Agent spans.
 func SetAgentAttributes(span trace.Span, name string) {
 	span.SetAttributes(
-		attribute.String(GenAIAgentNameKey, name),
-		attribute.String(AgentNameKey, name),    // Alias: agent_name
-		attribute.String(AgentNameDotKey, name), // Alias: agent.name
+		attribute.String(SpanAttrGenAIAgentNameKey, name),
+		attribute.String(SpanAttrAgentNameKey, name),    // Alias: agent_name
+		attribute.String(SpanAttrAgentNameDotKey, name), // Alias: agent.name
 	)
 }
 
 // SetWorkflowAttributes sets standard GenAI attributes for Workflow/Root spans.
 func SetWorkflowAttributes(span trace.Span) {
 	span.SetAttributes(
-		attribute.String(GenAISpanKindKey, SpanKindWorkflow),
-		attribute.String(GenAIOperationNameKey, "chain"),
+		attribute.String(SpanAttrGenAISpanKindKey, SpanKindWorkflow),
+		attribute.String(SpanAttrGenAIOperationNameKey, "chain"),
 	)
 }
 
@@ -187,4 +188,48 @@ func getFromGlobalConfig(key contextKey) string {
 		}
 	}
 	return ""
+}
+
+func getServiceName(cfg *configs.OpenTelemetryConfig) string {
+	if serviceFromEnv := os.Getenv("OTEL_SERVICE_NAME"); serviceFromEnv != "" {
+		return serviceFromEnv
+	}
+
+	if cfg.ApmPlus != nil {
+		if cfg.ApmPlus.ServiceName != "" {
+			return cfg.ApmPlus.ServiceName
+		}
+	}
+
+	if cfg.CozeLoop != nil {
+		if cfg.CozeLoop.ServiceName != "" {
+			return cfg.CozeLoop.ServiceName
+		}
+	}
+
+	if cfg.TLS != nil {
+		if cfg.TLS.ServiceName != "" {
+			return cfg.TLS.ServiceName
+		}
+	}
+	return "<unknown_service>"
+}
+
+var (
+	Version = getVersion()
+)
+
+func getVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, dep := range info.Deps {
+			if dep.Path == InstrumentationName && dep.Version != "" {
+				return dep.Version
+			}
+		}
+		// If linked as main module or not found in deps
+		if info.Main.Path == InstrumentationName && info.Main.Version != "" {
+			return info.Main.Version
+		}
+	}
+	return DefaultVersion
 }
