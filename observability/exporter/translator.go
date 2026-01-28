@@ -52,6 +52,7 @@ func (e *ADKTranslatedExporter) ExportSpans(ctx context.Context, spans []trace.R
 		translated[i] = &translatedSpan{ReadOnlySpan: s}
 	}
 	return e.SpanExporter.ExportSpans(ctx, translated)
+	// return e.SpanExporter.ExportSpans(ctx, spans)
 }
 
 // translatedSpan wraps a ReadOnlySpan and intercepts calls to Attributes().

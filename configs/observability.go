@@ -28,6 +28,7 @@ const (
 	EnvOtelServiceName                   = "OTEL_SERVICE_NAME"
 
 	// APMPlus
+	EnvObservabilityOpenTelemetryApmPlusProtocol    = "OBSERVABILITY_OPENTELEMETRY_APMPLUS_PROTOCOL"
 	EnvObservabilityOpenTelemetryApmPlusEndpoint    = "OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT"
 	EnvObservabilityOpenTelemetryApmPlusAPIKey      = "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY"
 	EnvObservabilityOpenTelemetryApmPlusServiceName = "OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME"
@@ -62,14 +63,15 @@ type OpenTelemetryConfig struct {
 	EnableGlobalProvider bool  `yaml:"enable_global_tracer"`
 	EnableMeterProvider  *bool `yaml:"enable_meter_provider"`
 
+	File     *FileConfig        `yaml:"file"`
+	Stdout   *StdoutConfig      `yaml:"stdout"`
 	ApmPlus  *ApmPlusConfig     `yaml:"apmplus"`
 	CozeLoop *CozeLoopConfig    `yaml:"cozeloop"`
 	TLS      *TLSExporterConfig `yaml:"tls"`
-	Stdout   *StdoutConfig      `yaml:"stdout"`
-	File     *FileConfig        `yaml:"file"`
 }
 
 type ApmPlusConfig struct {
+	Protocol    string `yaml:"protocol"` // grpc by default
 	Endpoint    string `yaml:"endpoint"`
 	APIKey      string `yaml:"api_key"`
 	ServiceName string `yaml:"service_name"`
@@ -109,6 +111,7 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 		if ot.ApmPlus == nil {
 			ot.ApmPlus = &ApmPlusConfig{}
 		}
+
 		ot.ApmPlus.Endpoint = v
 
 		if ot.EnableMeterProvider == nil {
@@ -117,12 +120,23 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 		}
 	}
 
+	// APMPlus Protocol
+	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryApmPlusProtocol); v != "" {
+		if ot.ApmPlus == nil {
+			ot.ApmPlus = &ApmPlusConfig{}
+		}
+		ot.ApmPlus.Protocol = v
+	}
+
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryApmPlusAPIKey); v != "" {
 		if ot.ApmPlus == nil {
 			ot.ApmPlus = &ApmPlusConfig{}
 		}
-		ot.ApmPlus.APIKey = v
+		if ot.ApmPlus.APIKey == "" {
+			ot.ApmPlus.APIKey = v
+		}
 	}
+
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryApmPlusServiceName); v != "" {
 		if ot.ApmPlus == nil {
 			ot.ApmPlus = &ApmPlusConfig{}
@@ -181,6 +195,7 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 		}
 		ot.TLS.Region = v
 	}
+
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryTLSTopicID); v != "" {
 		if ot.TLS == nil {
 			ot.TLS = &TLSExporterConfig{}
