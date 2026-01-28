@@ -655,7 +655,6 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 			if chunk.Usage != nil {
 				finalUsage = *chunk.Usage
 				usageFound = true
-				// fmt.Printf("DEBUG: Found usage in chunk: %+v\n", finalUsage)
 			}
 
 			if len(chunk.Choices) == 0 {
