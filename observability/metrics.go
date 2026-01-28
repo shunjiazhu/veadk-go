@@ -64,6 +64,9 @@ var (
 	streamingTimePerOutputTokenHistograms []metric.Float64Histogram
 	apmPlusLatencyHistograms              []metric.Float64Histogram
 	apmPlusToolTokenUsageHistograms       []metric.Float64Histogram
+
+	localMeterProvider  *sdkmetric.MeterProvider
+	globalMeterProvider *sdkmetric.MeterProvider
 )
 
 // RegisterLocalMetrics initializes the metrics system with a local isolated MeterProvider.
@@ -76,6 +79,7 @@ func RegisterLocalMetrics(readers []sdkmetric.Reader) {
 		}
 
 		mp := sdkmetric.NewMeterProvider(options...)
+		localMeterProvider = mp
 		initializeInstruments(mp.Meter(InstrumentationName))
 	})
 }
@@ -90,6 +94,7 @@ func RegisterGlobalMetrics(readers []sdkmetric.Reader) {
 		}
 
 		mp := sdkmetric.NewMeterProvider(options...)
+		globalMeterProvider = mp
 		otel.SetMeterProvider(mp)
 		// No need to call registerMeter here, because the global proxy registered in init()
 		initializeInstruments(otel.GetMeterProvider().Meter(InstrumentationName))

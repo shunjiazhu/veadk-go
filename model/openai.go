@@ -874,10 +874,8 @@ func (m *openAIModel) buildFinalResponse(text string, toolCalls []toolCall, usag
 
 func buildUsageMetadata(usage *usage) *genai.GenerateContentResponseUsageMetadata {
 	if usage == nil {
-		fmt.Println("DEBUG: buildUsageMetadata received nil usage")
 		return nil
 	}
-	fmt.Printf("DEBUG: buildUsageMetadata processing usage: %+v\n", usage)
 
 	promptTokens := usage.PromptTokens
 	if promptTokens == 0 {

@@ -32,6 +32,9 @@ import (
 func main() {
 	ctx := context.Background()
 	observability.Init(ctx)
+	defer func() {
+		_ = observability.Shutdown(ctx)
+	}()
 
 	// Create agent configuration
 	cfg := &veagent.Config{
@@ -59,6 +62,6 @@ func main() {
 
 	log.Println("Starting Observed Launcher...")
 	if err = l.Execute(ctx, config, args); err != nil {
-		log.Fatalf("Run failed: %v", err)
+		log.Printf("Run finished with error: %v", err)
 	}
 }

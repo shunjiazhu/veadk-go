@@ -17,6 +17,7 @@ package observability
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/volcengine/veadk-go/configs"
 	"github.com/volcengine/veadk-go/log"
@@ -175,6 +176,43 @@ func InitializeWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig)
 	err = initializeMeterProvider(ctx, cfg)
 	if err != nil {
 		errs = append(errs, err)
+	}
+
+	return errors.Join(errs...)
+}
+
+// Shutdown shuts down the observability system, flushing all spans and metrics.
+func Shutdown(ctx context.Context) error {
+	var errs []error
+	fmt.Println("DEBUG: Shutdown started")
+
+	// 1. Shutdown TracerProvider
+	tp := otel.GetTracerProvider()
+	if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {
+		fmt.Println("DEBUG: Shutting down TracerProvider")
+		if err := sdkTP.Shutdown(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	// 2. Shutdown local MeterProvider if exists
+	if localMeterProvider != nil {
+		fmt.Println("DEBUG: Shutting down local MeterProvider")
+		if err := localMeterProvider.Shutdown(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	} else {
+		fmt.Println("DEBUG: localMeterProvider is nil")
+	}
+
+	// 3. Shutdown global MeterProvider if exists
+	if globalMeterProvider != nil {
+		fmt.Println("DEBUG: Shutting down global MeterProvider")
+		if err := globalMeterProvider.Shutdown(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	} else {
+		fmt.Println("DEBUG: globalMeterProvider is nil")
 	}
 
 	return errors.Join(errs...)
