@@ -105,7 +105,7 @@ func (m *openAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		next := m.generateStream(ctx, openaiReq)
 		return func(yield func(*model.LLMResponse, error) bool) {
 			for resp, err := range next {
-				m.traceResponse(span, req, resp, err)
+				m.traceResponse(span, req, resp, err, true)
 				if !yield(resp, err) {
 					return
 				}
@@ -116,7 +116,7 @@ func (m *openAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 	next := m.generate(ctx, openaiReq)
 	return func(yield func(*model.LLMResponse, error) bool) {
 		for resp, err := range next {
-			m.traceResponse(span, req, resp, err)
+			m.traceResponse(span, req, resp, err, false)
 			if !yield(resp, err) {
 				return
 			}
@@ -125,7 +125,7 @@ func (m *openAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 }
 
 // traceResponse records GenAI attributes to the span.
-func (m *openAIModel) traceResponse(span trace.Span, req *model.LLMRequest, resp *model.LLMResponse, err error) {
+func (m *openAIModel) traceResponse(span trace.Span, req *model.LLMRequest, resp *model.LLMResponse, err error, stream bool) {
 	if !span.IsRecording() {
 		return
 	}
@@ -161,7 +161,31 @@ func (m *openAIModel) traceResponse(span trace.Span, req *model.LLMRequest, resp
 			if totalTokens > 0 {
 				attrs = append(attrs, attribute.Int64(observability.AttrGenAIUsageTotalTokens, totalTokens))
 			}
+
+			// Align with veadk-python: Record responding model
+			// Provides the actual model that generated the response.
+			attrs = append(attrs, attribute.String(observability.AttrGenAIResponseModel, m.name))
+
+			// TODO: Implement the following streaming metrics when supported by veadk-python alignment
+			// observability.MetricNameFirstTokenLatency
+			// observability.MetricNameStreamingTimeToGenerate
+			// observability.MetricNameStreamingTimePerOutputToken
+
 			span.SetAttributes(attrs...)
+
+			// Record metrics directly for streaming because the span might have ended prematurely in ADK-go.
+			// For non-streaming, span_enrich.go (OnEnd) will handle it via attributes.
+			if stream && (inputTokens > 0 || outputTokens > 0) {
+				metricAttrs := []attribute.KeyValue{
+					attribute.String(observability.AttrGenAIResponseModel, m.name),
+					attribute.String(observability.AttrGenAIRequestModel, m.name),
+					attribute.String(observability.AttrGenAISystem, "gcp.vertex.agent"), // Default system for ADK alignment
+				}
+				observability.RecordTokenUsage(context.Background(), inputTokens, outputTokens, metricAttrs...)
+			}
+		} else {
+			// Even without usage metadata, we should set the response model if we have a response
+			span.SetAttributes(attribute.String(observability.AttrGenAIResponseModel, m.name))
 		}
 	}
 }
@@ -175,8 +199,13 @@ type openAIRequest struct {
 	TopP           *float64        `json:"top_p,omitempty"`
 	Stop           []string        `json:"stop,omitempty"`
 	Stream         bool            `json:"stream,omitempty"`
+	StreamOptions  *streamOptions  `json:"stream_options,omitempty"`
 	ResponseFormat *responseFormat `json:"response_format,omitempty"`
 	ExtraBody      map[string]any
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
 func (r openAIRequest) MarshalJSON() ([]byte, error) {
@@ -204,6 +233,9 @@ func (r openAIRequest) MarshalJSON() ([]byte, error) {
 	}
 	if r.ResponseFormat != nil {
 		topLevel["response_format"] = r.ResponseFormat
+	}
+	if r.StreamOptions != nil {
+		topLevel["stream_options"] = r.StreamOptions
 	}
 
 	if r.ExtraBody != nil {
@@ -268,7 +300,9 @@ type choice struct {
 
 type usage struct {
 	PromptTokens        int                  `json:"prompt_tokens"`
+	InputTokens         int                  `json:"input_tokens"` // Ark-compatible field
 	CompletionTokens    int                  `json:"completion_tokens"`
+	OutputTokens        int                  `json:"output_tokens"` // Ark-compatible field
 	TotalTokens         int                  `json:"total_tokens"`
 	PromptTokensDetails *promptTokensDetails `json:"prompt_tokens_details,omitempty"`
 }
@@ -331,6 +365,9 @@ func (m *openAIModel) convertOpenAIRequest(req *model.LLMRequest) (*openAIReques
 			openaiReq.ResponseFormat = &responseFormat{Type: "json_object"}
 		}
 	}
+
+	// Enable token usage in streaming responses (OpenAI compatible)
+	openaiReq.StreamOptions = &streamOptions{IncludeUsage: true}
 
 	return openaiReq, nil
 }
@@ -595,7 +632,9 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 		scanner := bufio.NewScanner(httpResp.Body)
 		var textBuffer strings.Builder
 		var toolCalls []toolCall
-		var usage *usage
+		var finalUsage usage
+		var usageFound bool
+		var finishedReason string
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -613,11 +652,20 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 				continue
 			}
 
+			if chunk.Usage != nil {
+				finalUsage = *chunk.Usage
+				usageFound = true
+				// fmt.Printf("DEBUG: Found usage in chunk: %+v\n", finalUsage)
+			}
+
 			if len(chunk.Choices) == 0 {
 				continue
 			}
 
 			choice := chunk.Choices[0]
+			if choice.FinishReason != "" {
+				finishedReason = choice.FinishReason
+			}
 			delta := choice.Delta
 			if delta == nil {
 				continue
@@ -659,18 +707,7 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 					if tc.Function.Name != "" {
 						toolCalls[targetIdx].Function.Name += tc.Function.Name
 					}
-					toolCalls[targetIdx].Function.Arguments += tc.Function.Arguments
 				}
-			}
-
-			if chunk.Usage != nil {
-				usage = chunk.Usage
-			}
-
-			if choice.FinishReason != "" {
-				finalResp := m.buildFinalResponse(textBuffer.String(), toolCalls, usage, choice.FinishReason)
-				yield(finalResp, nil)
-				return
 			}
 		}
 
@@ -679,8 +716,15 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 			return
 		}
 
-		if textBuffer.Len() > 0 || len(toolCalls) > 0 {
-			finalResp := m.buildFinalResponse(textBuffer.String(), toolCalls, usage, "stop")
+		if textBuffer.Len() > 0 || len(toolCalls) > 0 || finishedReason != "" || usageFound {
+			var u *usage
+			if usageFound {
+				u = &finalUsage
+			}
+			if finishedReason == "" {
+				finishedReason = "stop"
+			}
+			finalResp := m.buildFinalResponse(textBuffer.String(), toolCalls, u, finishedReason)
 			yield(finalResp, nil)
 		}
 	}
@@ -830,12 +874,28 @@ func (m *openAIModel) buildFinalResponse(text string, toolCalls []toolCall, usag
 
 func buildUsageMetadata(usage *usage) *genai.GenerateContentResponseUsageMetadata {
 	if usage == nil {
+		fmt.Println("DEBUG: buildUsageMetadata received nil usage")
 		return nil
 	}
+	fmt.Printf("DEBUG: buildUsageMetadata processing usage: %+v\n", usage)
+
+	promptTokens := usage.PromptTokens
+	if promptTokens == 0 {
+		promptTokens = usage.InputTokens
+	}
+	completionTokens := usage.CompletionTokens
+	if completionTokens == 0 {
+		completionTokens = usage.OutputTokens
+	}
+	totalTokens := usage.TotalTokens
+	if totalTokens == 0 && (promptTokens > 0 || completionTokens > 0) {
+		totalTokens = promptTokens + completionTokens
+	}
+
 	metadata := &genai.GenerateContentResponseUsageMetadata{
-		PromptTokenCount:     int32(usage.PromptTokens),
-		CandidatesTokenCount: int32(usage.CompletionTokens),
-		TotalTokenCount:      int32(usage.TotalTokens),
+		PromptTokenCount:     int32(promptTokens),
+		CandidatesTokenCount: int32(completionTokens),
+		TotalTokenCount:      int32(totalTokens),
 	}
 	if usage.PromptTokensDetails != nil {
 		metadata.CachedContentTokenCount = int32(usage.PromptTokensDetails.CachedTokens)

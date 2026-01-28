@@ -142,6 +142,10 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 
 	t.Run("Agent Span", func(t *testing.T) {
 		_, span := tracer.Start(ctx, SpanInvokeAgent+" my_agent")
+		span.SetAttributes(
+			attribute.Int64(AttrGenAIUsageInputTokens, 50),
+			attribute.Int64(AttrGenAIUsageOutputTokens, 100),
+		)
 		span.End()
 
 		spans := exporter.GetSpans()
@@ -156,6 +160,25 @@ func TestSpanEnrichmentProcessor(t *testing.T) {
 			assert.True(t, foundAgentName, "Agent name mismatch")
 		}
 		exporter.Reset()
+
+		// Verify Metrics for Agent
+		var rm metricdata.ResourceMetrics
+		err := reader.Collect(ctx, &rm)
+		assert.NoError(t, err)
+
+		var foundToken, foundDuration bool
+		for _, sm := range rm.ScopeMetrics {
+			for _, m := range sm.Metrics {
+				if m.Name == MetricNameTokenUsage {
+					foundToken = true
+				}
+				if m.Name == MetricNameOperationDuration {
+					foundDuration = true
+				}
+			}
+		}
+		assert.True(t, foundToken, "Token usage metric should be recorded for Agent span")
+		assert.True(t, foundDuration, "Duration metric should be recorded for Agent span")
 	})
 
 	t.Run("Lifecycle", func(t *testing.T) {

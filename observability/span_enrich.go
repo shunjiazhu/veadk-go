@@ -109,15 +109,22 @@ func (p *SpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 		}
 	}
 
-	if spanName == SpanCallLLM {
-		RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
-		RecordAPMPlusSpanLatency(context.Background(), elapsed, metricAttrs...)
+	isLLM := spanName == SpanCallLLM
+	isAgent := spanName == SpanInvokeAgent || strings.HasPrefix(spanName, SpanInvokeAgent+" ")
+	isInvocation := spanName == SpanInvocation || spanName == "Run"
+
+	if isLLM {
 		RecordChatCount(context.Background(), 1, metricAttrs...)
 
 		if s.Status().Code == codes.Error {
 			metricAttrs = append(metricAttrs, attribute.String("error_type", s.Status().Description))
 			RecordExceptions(context.Background(), 1, metricAttrs...)
 		}
+	}
+
+	if isLLM || isAgent || isInvocation {
+		RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
+		RecordAPMPlusSpanLatency(context.Background(), elapsed, metricAttrs...)
 
 		// Record token usage if available in attributes
 		var input, output int64
@@ -139,13 +146,12 @@ func (p *SpanEnrichmentProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 			RecordTokenUsage(context.Background(), input, output, metricAttrs...)
 		}
 
-		if isStreaming {
+		if isLLM && isStreaming {
 			RecordStreamingTimeToGenerate(context.Background(), elapsed, metricAttrs...)
 			if output > 0 {
 				RecordStreamingTimePerOutputToken(context.Background(), elapsed/float64(output), metricAttrs...)
 			}
 		}
-
 	} else if strings.HasPrefix(spanName, SpanExecuteTool) {
 		RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
 		RecordAPMPlusSpanLatency(context.Background(), elapsed, metricAttrs...)
