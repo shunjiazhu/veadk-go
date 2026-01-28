@@ -1,7 +1,8 @@
 observability:
   opentelemetry:
+    enable_meter_provider: true
     stdout:
-      enable: 'true'
+      enable: true
     apmplus:
       endpoint: "http://apmplus-cn-beijing.volces.com:4317"
       api_key: ""

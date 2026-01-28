@@ -157,6 +157,10 @@ func setYamlToEnv(data map[string]interface{}, prefix string) {
 			if os.Getenv(fullKey) == "" {
 				_ = os.Setenv(fullKey, strconv.Itoa(v))
 			}
+		case bool:
+			if os.Getenv(fullKey) == "" {
+				_ = os.Setenv(fullKey, strconv.FormatBool(v))
+			}
 		}
 	}
 }

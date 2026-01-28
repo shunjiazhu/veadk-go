@@ -88,7 +88,7 @@ func SetGlobalTracerProvider(exp sdktrace.SpanExporter, enableMetrics bool, span
 
 func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
 	log.Info("Registered SpanEnrichmentProcessor for ADK Local TracerProvider")
-	enableMetrics := cfg != nil && (cfg.EnableMeterProvider == nil || *cfg.EnableMeterProvider) && cfg.ApmPlus != nil && cfg.ApmPlus.APIKey != ""
+	enableMetrics := cfg != nil && (cfg.EnableMeterProvider == nil || *cfg.EnableMeterProvider)
 	log.Info("Metrics collection is enabled", "enableMetrics", enableMetrics)
 	AddSpanProcessor(&SpanEnrichmentProcessor{EnableMetrics: enableMetrics})
 
@@ -114,7 +114,7 @@ func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) er
 		return err
 	}
 	if globalExp != nil {
-		enableMetrics := cfg != nil && (cfg.EnableMeterProvider == nil || *cfg.EnableMeterProvider) && cfg.ApmPlus != nil && cfg.ApmPlus.APIKey != ""
+		enableMetrics := cfg != nil && (cfg.EnableMeterProvider == nil || *cfg.EnableMeterProvider)
 		SetGlobalTracerProvider(globalExp, enableMetrics)
 	}
 	return nil
