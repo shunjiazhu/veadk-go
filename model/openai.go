@@ -29,9 +29,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/volcengine/veadk-go/common"
-	"github.com/volcengine/veadk-go/observability"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
@@ -99,13 +96,10 @@ func (m *openAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		openaiReq.ExtraBody = extraBody.(map[string]any)
 	}
 
-	span := trace.SpanFromContext(ctx)
-
 	if stream {
 		next := m.generateStream(ctx, openaiReq)
 		return func(yield func(*model.LLMResponse, error) bool) {
 			for resp, err := range next {
-				m.traceResponse(span, req, resp, err, true)
 				if !yield(resp, err) {
 					return
 				}
@@ -116,76 +110,9 @@ func (m *openAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 	next := m.generate(ctx, openaiReq)
 	return func(yield func(*model.LLMResponse, error) bool) {
 		for resp, err := range next {
-			m.traceResponse(span, req, resp, err, false)
 			if !yield(resp, err) {
 				return
 			}
-		}
-	}
-}
-
-// traceResponse records GenAI attributes to the span.
-func (m *openAIModel) traceResponse(span trace.Span, req *model.LLMRequest, resp *model.LLMResponse, err error, stream bool) {
-	if !span.IsRecording() {
-		return
-	}
-
-	// Record request model
-	span.SetAttributes(attribute.String(observability.AttrGenAIRequestModel, m.name))
-
-	if err != nil {
-		return
-	}
-
-	if resp != nil {
-		if resp.UsageMetadata != nil {
-			inputTokens := int64(resp.UsageMetadata.PromptTokenCount)
-			outputTokens := int64(resp.UsageMetadata.CandidatesTokenCount)
-			totalTokens := int64(resp.UsageMetadata.TotalTokenCount)
-
-			// If TotalTokenCount is 0 but others are not, calculate it
-			if totalTokens == 0 && (inputTokens > 0 || outputTokens > 0) {
-				totalTokens = inputTokens + outputTokens
-			}
-
-			// Standard GenAI Usage Attributes
-			attrs := []attribute.KeyValue{}
-			if inputTokens > 0 {
-				attrs = append(attrs, attribute.Int64(observability.AttrGenAIUsageInputTokens, inputTokens))
-				attrs = append(attrs, attribute.Int64(observability.AttrGenAIResponsePromptTokenCount, inputTokens))
-			}
-			if outputTokens > 0 {
-				attrs = append(attrs, attribute.Int64(observability.AttrGenAIUsageOutputTokens, outputTokens))
-				attrs = append(attrs, attribute.Int64(observability.AttrGenAIResponseCandidatesTokenCount, outputTokens))
-			}
-			if totalTokens > 0 {
-				attrs = append(attrs, attribute.Int64(observability.AttrGenAIUsageTotalTokens, totalTokens))
-			}
-
-			// Align with veadk-python: Record responding model
-			// Provides the actual model that generated the response.
-			attrs = append(attrs, attribute.String(observability.AttrGenAIResponseModel, m.name))
-
-			// TODO: Implement the following streaming metrics when supported by veadk-python alignment
-			// observability.MetricNameFirstTokenLatency
-			// observability.MetricNameStreamingTimeToGenerate
-			// observability.MetricNameStreamingTimePerOutputToken
-
-			span.SetAttributes(attrs...)
-
-			// Record metrics directly for streaming because the span might have ended prematurely in ADK-go.
-			// For non-streaming, span_enrich.go (OnEnd) will handle it via attributes.
-			if stream && (inputTokens > 0 || outputTokens > 0) {
-				metricAttrs := []attribute.KeyValue{
-					attribute.String(observability.AttrGenAIResponseModel, m.name),
-					attribute.String(observability.AttrGenAIRequestModel, m.name),
-					attribute.String(observability.AttrGenAISystem, "gcp.vertex.agent"), // Default system for ADK alignment
-				}
-				observability.RecordTokenUsage(context.Background(), inputTokens, outputTokens, metricAttrs...)
-			}
-		} else {
-			// Even without usage metadata, we should set the response model if we have a response
-			span.SetAttributes(attribute.String(observability.AttrGenAIResponseModel, m.name))
 		}
 	}
 }
@@ -831,6 +758,9 @@ func (m *openAIModel) convertResponse(resp *response) (*model.LLMResponse, error
 			Role:  "model",
 			Parts: parts,
 		},
+		CustomMetadata: map[string]any{
+			"response_model": resp.Model,
+		},
 	}
 
 	llmResp.UsageMetadata = buildUsageMetadata(resp.Usage)
@@ -866,6 +796,9 @@ func (m *openAIModel) buildFinalResponse(text string, toolCalls []toolCall, usag
 		},
 		FinishReason:  mapFinishReason(finishReason),
 		UsageMetadata: buildUsageMetadata(usage),
+		CustomMetadata: map[string]any{
+			"response_model": m.name,
+		},
 	}
 
 	return llmResp

@@ -144,6 +144,12 @@ const (
 	AttrGenAIOutputValue = "output.value"
 )
 
+// Event names
+const (
+	EventGenAIContentPrompt     = "gen_ai.content.prompt"
+	EventGenAIContentCompletion = "gen_ai.content.completion"
+)
+
 // Tool attributes
 const (
 	AttrGenAIOperationName = "gen_ai.operation.name"

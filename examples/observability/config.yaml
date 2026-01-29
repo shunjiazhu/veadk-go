@@ -3,8 +3,10 @@ observability:
     enable_meter_provider: true
     stdout:
       enable: true
+    file: 
+      path: ./go_output.txt
     apmplus:
       endpoint: "http://apmplus-cn-beijing.volces.com:4317"
       api_key: ""
-      service_name: "adk.go.demo"
+      service_name: "adk.go.demo.v4"
     
