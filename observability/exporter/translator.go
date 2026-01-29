@@ -111,70 +111,7 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 		}
 	}
 
-	// Fallback for gen_ai.response.model: use request model if response model is missing or empty
-	_, hasResponseModel := presentKeys["gen_ai.response.model"]
-	if !hasResponseModel {
-		var requestModel attribute.Value
-		found := false
-
-		// 1. Check if it was already translated/passed through in newAttrs
-		for _, kv := range newAttrs {
-			if string(kv.Key) == "gen_ai.request.model" {
-				requestModel = kv.Value
-				if requestModel.AsString() != "" {
-					found = true
-					break
-				}
-			}
-		}
-
-		// 2. Check original attributes if not found in newAttrs
-		if !found {
-			for i := range attrs {
-				if string(attrs[i].Key) == "gen_ai.request.model" {
-					requestModel = attrs[i].Value
-					if requestModel.AsString() != "" {
-						found = true
-						break
-					}
-				}
-			}
-		}
-
-		if found {
-			newAttrs = append(newAttrs, attribute.KeyValue{Key: attribute.Key("gen_ai.response.model"), Value: requestModel})
-		}
-	} else {
-		// If response model is empty string, try to fill it
-		isEmpty := false
-		for _, kv := range newAttrs {
-			if string(kv.Key) == "gen_ai.response.model" && kv.Value.AsString() == "" {
-				isEmpty = true
-				break
-			}
-		}
-		if isEmpty {
-			// Try to find request model as fallback
-			var requestModel attribute.Value
-			found := false
-			for _, kv := range newAttrs {
-				if string(kv.Key) == "gen_ai.request.model" && kv.Value.AsString() != "" {
-					requestModel = kv.Value
-					found = true
-					break
-				}
-			}
-			if found {
-				// Replace the empty response model
-				for i := range newAttrs {
-					if string(newAttrs[i].Key) == "gen_ai.response.model" {
-						newAttrs[i].Value = requestModel
-						break
-					}
-				}
-			}
-		}
-	}
+	// Fallback logic for response model is removed as it is now handled by the plugin.
 
 	return newAttrs
 }

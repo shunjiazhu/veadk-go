@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -84,17 +85,31 @@ func getFileWriter(path string) io.Writer {
 		log.Warn("No path provided for file writer, using io.Discard")
 		return io.Discard
 	}
-	if fileWriter, ok := fileWriters.Load(path); ok {
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		log.Warn("Failed to resolve absolute path, using original", "path", path, "err", err)
+		absPath = path
+	}
+
+	if fileWriter, ok := fileWriters.Load(absPath); ok {
 		return fileWriter.(io.Writer)
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	// Ensure directory exists
+	if dir := filepath.Dir(absPath); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			log.Warn("Failed to create directory for exporter", "path", absPath, "err", err)
+		}
+	}
+
+	f, err := os.OpenFile(absPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		log.Warn("Failed to open file for exporter, will use io.Discard instead", "path", path, "err", err)
+		log.Warn("Failed to open file for exporter, will use io.Discard instead", "path", absPath, "err", err)
 		return io.Discard
 	}
 
-	writers, _ := fileWriters.LoadOrStore(path, f)
+	writers, _ := fileWriters.LoadOrStore(absPath, f)
 	return writers.(io.Writer)
 }
 
@@ -176,7 +191,7 @@ func NewMultiExporter(ctx context.Context, cfg *configs.OpenTelemetryConfig) (tr
 		}
 	}
 
-	log.Info("trace data will be exported", "exporter count", len(exporters))
+	log.Debug("trace data will be exported", "exporter count", len(exporters))
 
 	if len(exporters) == 1 {
 		return exporters[0], nil
@@ -234,9 +249,8 @@ func NewMetricReader(ctx context.Context, cfg *configs.OpenTelemetryConfig) ([]s
 		}
 	}
 
-	if len(readers) > 0 {
-		log.Info("metric data will be exported", "exporter count", len(readers))
-	}
+	log.Debug("metric data will be exported", "exporter count", len(readers))
+
 	return readers, nil
 }
 

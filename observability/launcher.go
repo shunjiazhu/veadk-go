@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"iter"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -66,13 +67,27 @@ func TraceRun(ctx context.Context, userID, sessionID string, msg any, fn func(co
 
 	// Use centralized attribute setting logic
 	SetCommonAttributes(tracedCtx, span)
+	SetWorkflowAttributes(span)
 
 	if jsonIn, err := json.Marshal(msg); err == nil {
 		span.SetAttributes(attribute.String(AttrGenAIInputValue, string(jsonIn)))
 	}
 
+	startTime := time.Now()
+
 	return func(yield func(*session.Event, error) bool) {
-		defer span.End()
+		defer func() {
+			elapsed := time.Since(startTime).Seconds()
+			// Record root span metrics manually since processor is removed
+			metricAttrs := []attribute.KeyValue{
+				attribute.String("gen_ai_operation_name", "chain"),
+				attribute.String("gen_ai_operation_type", "workflow"),
+				attribute.String("gen_ai_system", "veadk"),
+			}
+			RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
+			RecordAPMPlusSpanLatency(context.Background(), elapsed, metricAttrs...)
+			span.End()
+		}()
 		for event, err := range fn(tracedCtx) {
 			if err != nil {
 				span.RecordError(err)
@@ -87,7 +102,5 @@ func TraceRun(ctx context.Context, userID, sessionID string, msg any, fn func(co
 func StartSpan(ctx context.Context, name string) (context.Context, trace.Span) {
 	tr := otel.Tracer(InstrumentationName)
 	ctx, span := tr.Start(ctx, name)
-
-	// Span is already enriched by SpanEnrichmentProcessor via OnStart
 	return ctx, span
 }

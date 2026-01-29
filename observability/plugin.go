@@ -53,6 +53,7 @@ func NewADKObservabilityPlugin() *plugin.Plugin {
 		Name:                "observability",
 		BeforeModelCallback: p.BeforeModel,
 		AfterModelCallback:  p.AfterModel,
+		BeforeToolCallback:  p.BeforeTool,
 		AfterToolCallback:   p.AfterTool,
 		BeforeAgentCallback: p.BeforeAgent,
 		AfterAgentCallback:  p.AfterAgent,
@@ -204,10 +205,15 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 	// ---------------------------------------------------------
 	// Metrics: Time to First Token (Streaming Only)
 	// ---------------------------------------------------------
+	startTimeVal, _ := ctx.State().Get(stateKeyStartTime)
+	var startTime time.Time
+	if t, ok := startTimeVal.(time.Time); ok {
+		startTime = t
+	}
+
 	if resp.Partial && currentAcc == nil && resp.Content != nil {
 		// This is the very first chunk
-		startTimeVal, _ := ctx.State().Get(stateKeyStartTime)
-		if startTime, ok := startTimeVal.(time.Time); ok {
+		if !startTime.IsZero() {
 			latency := time.Since(startTime).Seconds()
 			_ = ctx.State().Set(stateKeyFirstTokenTime, time.Now())
 
@@ -314,6 +320,27 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 
 		// Add gen_ai.choice event (aligned with Python)
 		p.addChoiceEvents(span, currentAcc)
+	}
+
+	// If this is the final chunk (or non-streaming response), record final metrics
+	if !resp.Partial {
+		// Record Operation Duration and Latency
+		if !startTime.IsZero() {
+			duration := time.Since(startTime).Seconds()
+			metricAttrs := []attribute.KeyValue{
+				attribute.String(AttrGenAISystem, "veadk"),
+				attribute.String("gen_ai_response_model", finalModelName),
+				attribute.String("gen_ai_operation_name", "chat"),
+				attribute.String("gen_ai_operation_type", "llm"),
+			}
+			RecordOperationDuration(context.Context(ctx), duration, metricAttrs...)
+			RecordAPMPlusSpanLatency(context.Context(ctx), duration, metricAttrs...)
+
+			// Record Exceptions if needed (though usually handled via err check at top)
+			// But if we want to record "success" implicit via lack of exception metric, that's fine.
+			// span_enrich recorded exception if status code was Error.
+			// We handled err at top of function.
+		}
 	}
 
 	return nil, nil
@@ -585,6 +612,35 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 	}
 	span.SetAttributes(attrs...)
 
+	// Metrics
+	startTimeVal, _ := ctx.State().Get(stateKeyStartTime)
+	if startTime, ok := startTimeVal.(time.Time); ok {
+		duration := time.Since(startTime).Seconds()
+		metricAttrs := []attribute.KeyValue{
+			attribute.String("gen_ai_operation_name", tool.Name()),
+			attribute.String("gen_ai_operation_type", "tool"),
+			attribute.String("gen_ai_system", "veadk"),
+		}
+		RecordOperationDuration(context.Context(ctx), duration, metricAttrs...)
+		RecordAPMPlusSpanLatency(context.Context(ctx), duration, metricAttrs...)
+
+		// Tool Token Usage (Estimated)
+		inputChars := int64(len(string(argsJSON)))
+		outputChars := int64(len(string(resultJSON)))
+
+		if inputChars > 0 {
+			RecordAPMPlusToolTokenUsage(context.Context(ctx), inputChars/4, append(metricAttrs, attribute.String("token_type", "input"))...)
+		}
+		if outputChars > 0 {
+			RecordAPMPlusToolTokenUsage(context.Context(ctx), outputChars/4, append(metricAttrs, attribute.String("token_type", "output"))...)
+		}
+	}
+
+	return nil, nil
+}
+
+func (p *adkObservabilityPlugin) BeforeTool(ctx tool.Context, tool tool.Tool, args map[string]any) (map[string]any, error) {
+	_ = ctx.State().Set(stateKeyStartTime, time.Now())
 	return nil, nil
 }
 
