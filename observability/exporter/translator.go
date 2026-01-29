@@ -24,20 +24,19 @@ import (
 )
 
 var (
-	// ADKAttributeKeyMap defines the mapping from Google ADK-internal keys to GenAI standard keys.
+	// ADKAttributeKeyMap maps ADK internal attribute keys to standard GenAI keys.
 	ADKAttributeKeyMap = map[string]string{
-		"gcp.vertex.agent.llm_request":   "input.value",
-		"gcp.vertex.agent.llm_response":  "output.value",
-		"gcp.vertex.agent.session_id":    "gen_ai.session.id",
-		"gcp.vertex.agent.invocation_id": "gen_ai.invocation.id",
-		"gcp.vertex.agent.event_id":      "gen_ai.event.id",
-		"gen_ai.operation.name":          "gen_ai.request.type",
+		"gcp.vertex.agent.llm_request":  "input.value",
+		"gcp.vertex.agent.llm_response": "output.value",
+		"gcp.vertex.agent.session_id":   "gen_ai.session.id",
+		"gcp.vertex.agent.model":        "gen_ai.response.model",
+		"gcp.vertex.agent.usage":        "gen_ai.usage",
 	}
 
-	// ADKTargetKeyAliases defines aliases for target standard keys that prevent redundant mapping.
+	// ADKTargetKeyAliases maps standard keys to their legacy or platform-specific aliases.
 	ADKTargetKeyAliases = map[string][]string{
-		"input.value":  {"gen_ai.input.value"},
-		"output.value": {"gen_ai.output.value"},
+		"gen_ai.response.model": {"gcp.vertex.agent.model"},
+		"gen_ai.usage":          {"gcp.vertex.agent.usage"},
 	}
 )
 
@@ -62,56 +61,26 @@ type translatedSpan struct {
 
 func (p *translatedSpan) Attributes() []attribute.KeyValue {
 	attrs := p.ReadOnlySpan.Attributes()
+	newAttrs := make([]attribute.KeyValue, 0, len(attrs))
 
-	presentKeys := make(map[string]struct{}, len(attrs)+len(ADKAttributeKeyMap))
-	sourceValues := make(map[string]attribute.Value)
-
-	newAttrs := make([]attribute.KeyValue, 0, len(attrs)+len(ADKAttributeKeyMap))
-
-	for i := range attrs {
-		kv := attrs[i]
+	for _, kv := range attrs {
 		key := string(kv.Key)
 
-		if _, isSource := ADKAttributeKeyMap[key]; isSource {
-			sourceValues[key] = kv.Value
-		}
-
+		// 1. Map ADK internal attributes if not already present in standard form
 		if strings.HasPrefix(key, "gcp.vertex.agent.") {
+			if targetKey, ok := ADKAttributeKeyMap[key]; ok {
+				newAttrs = append(newAttrs, attribute.KeyValue{Key: attribute.Key(targetKey), Value: kv.Value})
+			}
 			continue
 		}
 
-		presentKeys[key] = struct{}{}
-
-		// We use a literal "gen_ai.system" to avoid circular dependency with observability constants
+		// 2. Patch gen_ai.system if needed
 		if key == "gen_ai.system" && kv.Value.AsString() == "gcp.vertex.agent" {
 			kv = attribute.String("gen_ai.system", "veadk")
 		}
 
 		newAttrs = append(newAttrs, kv)
 	}
-
-	for sourceKey, targetKey := range ADKAttributeKeyMap {
-		isAlreadyPresent := false
-		if _, ok := presentKeys[targetKey]; ok {
-			isAlreadyPresent = true
-		} else {
-			for _, alias := range ADKTargetKeyAliases[targetKey] {
-				if _, ok := presentKeys[alias]; ok {
-					isAlreadyPresent = true
-					break
-				}
-			}
-		}
-
-		if !isAlreadyPresent {
-			if val, ok := sourceValues[sourceKey]; ok {
-				newAttrs = append(newAttrs, attribute.KeyValue{Key: attribute.Key(targetKey), Value: val})
-				presentKeys[targetKey] = struct{}{}
-			}
-		}
-	}
-
-	// Fallback logic for response model is removed as it is now handled by the plugin.
 
 	return newAttrs
 }

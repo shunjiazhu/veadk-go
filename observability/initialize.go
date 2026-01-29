@@ -62,8 +62,7 @@ func SetGlobalTracerProvider(exp sdktrace.SpanExporter, enableMetrics bool, span
 	// 1. Try to register with existing TracerProvider if it's an SDK TracerProvider
 	globalTP := otel.GetTracerProvider()
 	if sdkTP, ok := globalTP.(*sdktrace.TracerProvider); ok {
-		log.Info("Registering SpanEnrichmentProcessor and Exporter to existing global TracerProvider")
-		// SpanEnrichmentProcessor removed
+		log.Info("Registering ADK Exporter to existing global TracerProvider")
 		for _, sp := range spanProcessors {
 			sdkTP.RegisterSpanProcessor(sp)
 		}
@@ -85,8 +84,6 @@ func SetGlobalTracerProvider(exp sdktrace.SpanExporter, enableMetrics bool, span
 }
 
 func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	// SpanEnrichmentProcessor is removed in favor of plugin callbacks.
-	// AddSpanProcessor(&SpanEnrichmentProcessor{EnableMetrics: enableMetrics})
 
 	if cfg == nil {
 		return nil
@@ -103,7 +100,7 @@ func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) err
 }
 
 func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	log.Info("Registered SpanEnrichmentProcessor for ADK Global TracerProvider")
+	log.Info("Registering ADK Global TracerProvider")
 
 	globalExp, err := exporter.NewMultiExporter(ctx, cfg)
 	if err != nil {

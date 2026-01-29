@@ -17,10 +17,12 @@ package observability
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/volcengine/veadk-go/configs"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -43,14 +45,37 @@ const (
 	stateKeyFirstTokenTime  = "veadk.observability.first_token_time"
 )
 
+// Option defines a functional option for the ADKObservabilityPlugin.
+type Option func(*adkObservabilityPlugin)
+
+// WithEnableMetrics creates an Option to manually control metrics recording.
+func WithEnableMetrics(enable bool) Option {
+	return func(p *adkObservabilityPlugin) {
+		enableVal := enable
+		p.config.EnableMetrics = &enableVal
+	}
+}
+
+// PluginConfig defines the internal configuration for the ADKObservabilityPlugin.
+type PluginConfig struct {
+	// EnableMetrics allows manual control over whether metrics are recorded for this plugin.
+	// If nil, it will follow the global configuration (EnableMeterProvider).
+	EnableMetrics *bool
+}
+
 // NewADKObservabilityPlugin creates a new observability plugin for ADK.
 // It returns a *plugin.Plugin that can be registered in launcher.Config or agent.Config.
-func NewADKObservabilityPlugin() *plugin.Plugin {
+func NewADKObservabilityPlugin(opts ...Option) *plugin.Plugin {
 	p := &adkObservabilityPlugin{
 		tracer: otel.Tracer(InstrumentationName),
 	}
+
+	for _, opt := range opts {
+		opt(p)
+	}
+
 	pluginInstance, _ := plugin.New(plugin.Config{
-		Name:                "observability",
+		Name:                "veadk-observability",
 		BeforeModelCallback: p.BeforeModel,
 		AfterModelCallback:  p.AfterModel,
 		BeforeToolCallback:  p.BeforeTool,
@@ -63,6 +88,20 @@ func NewADKObservabilityPlugin() *plugin.Plugin {
 
 type adkObservabilityPlugin struct {
 	tracer trace.Tracer
+	config PluginConfig
+}
+
+func (p *adkObservabilityPlugin) isMetricsEnabled() bool {
+	if p.config.EnableMetrics != nil {
+		return *p.config.EnableMetrics
+	}
+	// Fallback to global config
+	globalConfig := configs.GetGlobalConfig()
+	if globalConfig != nil && globalConfig.Observability != nil && globalConfig.Observability.OpenTelemetry != nil {
+		cfg := globalConfig.Observability.OpenTelemetry
+		return cfg.EnableMeterProvider == nil || *cfg.EnableMeterProvider
+	}
+	return true // Default to true if no config found
 }
 
 // BeforeModel is called before the LLM is called.
@@ -72,7 +111,7 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 
 	// 2. Start our OWN span to cover the full duration of the call (including streaming).
 	// ADK's "call_llm" span will be closed prematurely by the framework on the first chunk.
-	_, span := p.tracer.Start(context.Context(ctx), "gen_ai.content")
+	_, span := p.tracer.Start(context.Context(ctx), "chat")
 	_ = ctx.State().Set(stateKeyStreamingSpan, span)
 
 	// Record start time for metrics
@@ -86,6 +125,7 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 	// Store model name for AfterModel
 	_ = ctx.State().Set(stateKeyModelName, req.Model)
 
+	SetCommonAttributes(context.Context(ctx), span)
 	// Set GenAI standard span attributes
 	SetLLMAttributes(span)
 
@@ -106,6 +146,21 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 		if req.Config.MaxOutputTokens > 0 {
 			attrs = append(attrs, attribute.Int64(AttrGenAIRequestMaxTokens, int64(req.Config.MaxOutputTokens)))
 		}
+		if len(req.Config.Tools) > 0 {
+			for i, tool := range req.Config.Tools {
+				if tool.FunctionDeclarations != nil {
+					for j, fn := range tool.FunctionDeclarations {
+						prefix := fmt.Sprintf("gen_ai.request.functions.%d.", i+j) // Simplified indexing
+						attrs = append(attrs, attribute.String(prefix+"name", fn.Name))
+						attrs = append(attrs, attribute.String(prefix+"description", fn.Description))
+						if fn.Parameters != nil {
+							paramsJSON, _ := json.Marshal(fn.Parameters)
+							attrs = append(attrs, attribute.String(prefix+"parameters", string(paramsJSON)))
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Capture messages in GenAI format for the span
@@ -120,6 +175,7 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 
 	// Add input.value (standard for some collectors)
 	attrs = append(attrs, attribute.String(AttrGenAIInput, string(messagesJSON)))
+	attrs = append(attrs, attribute.String(AttrGenAIInputValue, string(messagesJSON)))
 
 	span.SetAttributes(attrs...)
 
@@ -223,7 +279,9 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 				attribute.String("gen_ai_operation_name", "chat"),
 				attribute.String("gen_ai_operation_type", "llm"),
 			}
-			RecordStreamingTimeToFirstToken(context.Context(ctx), latency, metricAttrs...)
+			if p.isMetricsEnabled() {
+				RecordStreamingTimeToFirstToken(context.Context(ctx), latency, metricAttrs...)
+			}
 		}
 	}
 
@@ -291,8 +349,10 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 				attribute.String("gen_ai_operation_type", "llm"),
 			}
 
-			// Streaming Time to Generate
-			RecordStreamingTimeToGenerate(context.Context(ctx), totalDuration, metricAttrs...)
+			if p.isMetricsEnabled() {
+				// Streaming Time to Generate
+				RecordStreamingTimeToGenerate(context.Context(ctx), totalDuration, metricAttrs...)
+			}
 
 			// Time Per Output Token
 			// Only valid if we have output tokens and we tracked first token time
@@ -303,7 +363,9 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 					generateDuration := time.Since(firstTokenTime).Seconds()
 					if generateDuration > 0 {
 						timePerToken := generateDuration / float64(lc)
-						RecordStreamingTimePerOutputToken(context.Context(ctx), timePerToken, metricAttrs...)
+						if p.isMetricsEnabled() {
+							RecordStreamingTimePerOutputToken(context.Context(ctx), timePerToken, metricAttrs...)
+						}
 					}
 				}
 			}
@@ -333,8 +395,10 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 				attribute.String("gen_ai_operation_name", "chat"),
 				attribute.String("gen_ai_operation_type", "llm"),
 			}
-			RecordOperationDuration(context.Context(ctx), duration, metricAttrs...)
-			RecordAPMPlusSpanLatency(context.Context(ctx), duration, metricAttrs...)
+			if p.isMetricsEnabled() {
+				RecordOperationDuration(context.Context(ctx), duration, metricAttrs...)
+				RecordAPMPlusSpanLatency(context.Context(ctx), duration, metricAttrs...)
+			}
 
 			// Record Exceptions if needed (though usually handled via err check at top)
 			// But if we want to record "success" implicit via lack of exception metric, that's fine.
@@ -387,10 +451,18 @@ func (p *adkObservabilityPlugin) handleUsage(ctx agent.CallbackContext, span tra
 		attrs = append(attrs, attribute.Int64(AttrGenAIUsageTotalTokens, totalTokens))
 	}
 
+	if resp.UsageMetadata != nil {
+		if resp.UsageMetadata.CachedContentTokenCount > 0 {
+			attrs = append(attrs, attribute.Int64(AttrGenAIUsageCacheReadInputTokens, int64(resp.UsageMetadata.CachedContentTokenCount)))
+		}
+		// Always set cache creation to 0 if not provided, for parity with python
+		attrs = append(attrs, attribute.Int64(AttrGenAIUsageCacheCreationInputTokens, 0))
+	}
+
 	span.SetAttributes(attrs...)
 
 	// Record metrics directly from the plugin logic
-	if promptTokens > 0 || candidateTokens > 0 {
+	if p.isMetricsEnabled() && (promptTokens > 0 || candidateTokens > 0) {
 		metricAttrs := []attribute.KeyValue{
 			attribute.String(AttrGenAISystem, "veadk"),
 			attribute.String("gen_ai_response_model", modelName),
@@ -601,6 +673,7 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 
 	// Set GenAI standard span attributes
 	SetToolAttributes(span, tool.Name())
+	SetCommonAttributes(context.Context(ctx), span)
 
 	// Enrich standard attributes
 	argsJSON, _ := json.Marshal(args)
@@ -621,18 +694,22 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 			attribute.String("gen_ai_operation_type", "tool"),
 			attribute.String("gen_ai_system", "veadk"),
 		}
-		RecordOperationDuration(context.Context(ctx), duration, metricAttrs...)
-		RecordAPMPlusSpanLatency(context.Context(ctx), duration, metricAttrs...)
+		if p.isMetricsEnabled() {
+			RecordOperationDuration(context.Context(ctx), duration, metricAttrs...)
+			RecordAPMPlusSpanLatency(context.Context(ctx), duration, metricAttrs...)
+		}
 
 		// Tool Token Usage (Estimated)
 		inputChars := int64(len(string(argsJSON)))
 		outputChars := int64(len(string(resultJSON)))
 
-		if inputChars > 0 {
-			RecordAPMPlusToolTokenUsage(context.Context(ctx), inputChars/4, append(metricAttrs, attribute.String("token_type", "input"))...)
-		}
-		if outputChars > 0 {
-			RecordAPMPlusToolTokenUsage(context.Context(ctx), outputChars/4, append(metricAttrs, attribute.String("token_type", "output"))...)
+		if p.isMetricsEnabled() {
+			if inputChars > 0 {
+				RecordAPMPlusToolTokenUsage(context.Context(ctx), inputChars/4, append(metricAttrs, attribute.String("token_type", "input"))...)
+			}
+			if outputChars > 0 {
+				RecordAPMPlusToolTokenUsage(context.Context(ctx), outputChars/4, append(metricAttrs, attribute.String("token_type", "output"))...)
+			}
 		}
 	}
 
@@ -659,6 +736,7 @@ func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.
 
 	// Always set agent attributes
 	SetAgentAttributes(span, agentName)
+	SetCommonAttributes(context.Context(ctx), span)
 
 	// If this is the root agent (or a workflow agent), set workflow attributes.
 	SetWorkflowAttributes(span)
