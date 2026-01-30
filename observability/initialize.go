@@ -107,7 +107,7 @@ func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) er
 		return err
 	}
 	if globalExp != nil {
-		enableMetrics := cfg != nil && (cfg.EnableMeterProvider == nil || *cfg.EnableMeterProvider)
+		enableMetrics := cfg != nil && (cfg.EnableMetrics == nil || *cfg.EnableMetrics)
 		SetGlobalTracerProvider(globalExp, enableMetrics)
 	}
 	return nil
@@ -133,7 +133,7 @@ func initializeTraceProvider(ctx context.Context, cfg *configs.OpenTelemetryConf
 
 func initializeMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
 	var errs []error
-	if cfg == nil || cfg.EnableMeterProvider == nil || !*cfg.EnableMeterProvider {
+	if cfg == nil || cfg.EnableMetrics == nil || !*cfg.EnableMetrics {
 		log.Info("Meter provider is not enabled")
 		return nil
 	}

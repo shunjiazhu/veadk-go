@@ -22,10 +22,10 @@ import (
 
 const (
 	// Global
+	EnvOtelServiceName                   = "OTEL_SERVICE_NAME"
 	EnvObservabilityEnableLocalProvider  = "OBSERVABILITY_OPENTELEMETRY_ENABLE_LOCAL_PROVIDER"
 	EnvObservabilityEnableGlobalProvider = "OBSERVABILITY_OPENTELEMETRY_ENABLE_GLOBAL_PROVIDER"
-	EnvObservabilityEnableMeterProvider  = "OBSERVABILITY_OPENTELEMETRY_ENABLE_METER_PROVIDER"
-	EnvOtelServiceName                   = "OTEL_SERVICE_NAME"
+	EnvObservabilityEnableMetrics        = "OBSERVABILITY_OPENTELEMETRY_ENABLE_METRICS"
 
 	// APMPlus
 	EnvObservabilityOpenTelemetryApmPlusProtocol    = "OBSERVABILITY_OPENTELEMETRY_APMPLUS_PROTOCOL"
@@ -61,7 +61,7 @@ type ObservabilityConfig struct {
 type OpenTelemetryConfig struct {
 	EnableLocalProvider  bool  `yaml:"enable_local_tracer"`
 	EnableGlobalProvider bool  `yaml:"enable_global_tracer"`
-	EnableMeterProvider  *bool `yaml:"enable_meter_provider"`
+	EnableMetrics        *bool `yaml:"enable_metrics"`
 
 	File     *FileConfig        `yaml:"file"`
 	Stdout   *StdoutConfig      `yaml:"stdout"`
@@ -114,9 +114,9 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 
 		ot.ApmPlus.Endpoint = v
 
-		if ot.EnableMeterProvider == nil {
-			ot.EnableMeterProvider = new(bool)
-			*ot.EnableMeterProvider = true
+		if ot.EnableMetrics == nil {
+			ot.EnableMetrics = new(bool)
+			*ot.EnableMetrics = true
 		}
 	}
 
@@ -202,6 +202,7 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 		}
 		ot.TLS.TopicID = v
 	}
+
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryTLSAccessKey); v != "" {
 		if ot.TLS == nil {
 			ot.TLS = &TLSExporterConfig{}
@@ -241,10 +242,10 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 	}
 
 	// Meter Provider
-	if v := utils.GetEnvWithDefault(EnvObservabilityEnableMeterProvider); v != "" {
-		if ot.EnableMeterProvider == nil {
-			ot.EnableMeterProvider = new(bool)
+	if v := utils.GetEnvWithDefault(EnvObservabilityEnableMetrics); v != "" {
+		if ot.EnableMetrics == nil {
+			ot.EnableMetrics = new(bool)
 		}
-		*ot.EnableMeterProvider = v == "true"
+		*ot.EnableMetrics = v == "true"
 	}
 }

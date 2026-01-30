@@ -54,7 +54,7 @@ func main() {
 		AgentLoader:    agent.NewSingleLoader(a),
 		SessionService: session.InMemoryService(),
 		PluginConfig: runner.PluginConfig{
-			Plugins: []*plugin.Plugin{observability.NewADKObservabilityPlugin()},
+			Plugins: []*plugin.Plugin{observability.NewPlugin()},
 		},
 	}
 

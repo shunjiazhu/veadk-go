@@ -59,13 +59,13 @@ func WithEnableMetrics(enable bool) Option {
 // PluginConfig defines the internal configuration for the ADKObservabilityPlugin.
 type PluginConfig struct {
 	// EnableMetrics allows manual control over whether metrics are recorded for this plugin.
-	// If nil, it will follow the global configuration (EnableMeterProvider).
+	// If nil, it will follow the global configuration (EnableMetrics).
 	EnableMetrics *bool
 }
 
-// NewADKObservabilityPlugin creates a new observability plugin for ADK.
+// NewPlugin creates a new observability plugin for ADK.
 // It returns a *plugin.Plugin that can be registered in launcher.Config or agent.Config.
-func NewADKObservabilityPlugin(opts ...Option) *plugin.Plugin {
+func NewPlugin(opts ...Option) *plugin.Plugin {
 	p := &adkObservabilityPlugin{
 		tracer: otel.Tracer(InstrumentationName),
 	}
@@ -99,7 +99,7 @@ func (p *adkObservabilityPlugin) isMetricsEnabled() bool {
 	globalConfig := configs.GetGlobalConfig()
 	if globalConfig != nil && globalConfig.Observability != nil && globalConfig.Observability.OpenTelemetry != nil {
 		cfg := globalConfig.Observability.OpenTelemetry
-		return cfg.EnableMeterProvider == nil || *cfg.EnableMeterProvider
+		return cfg.EnableMetrics == nil || *cfg.EnableMetrics
 	}
 	return true // Default to true if no config found
 }

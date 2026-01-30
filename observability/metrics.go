@@ -50,9 +50,11 @@ var (
 
 var (
 	// Slices to hold instruments from multiple providers (Global, Local, etc.)
-	localOnce     sync.Once
-	globalOnce    sync.Once
-	instrumentsMu sync.RWMutex
+	localOnce           sync.Once
+	globalOnce          sync.Once
+	instrumentsMu       sync.RWMutex
+	localMeterProvider  *sdkmetric.MeterProvider
+	globalMeterProvider *sdkmetric.MeterProvider
 
 	// Standard Gen AI Metrics
 	tokenUsageHistograms                  []metric.Float64Histogram
@@ -62,11 +64,10 @@ var (
 	exceptionsCounters                    []metric.Int64Counter
 	streamingTimeToGenerateHistograms     []metric.Float64Histogram
 	streamingTimePerOutputTokenHistograms []metric.Float64Histogram
-	apmPlusLatencyHistograms              []metric.Float64Histogram
-	apmPlusToolTokenUsageHistograms       []metric.Float64Histogram
 
-	localMeterProvider  *sdkmetric.MeterProvider
-	globalMeterProvider *sdkmetric.MeterProvider
+	// special metrics for APMPlus
+	apmPlusLatencyHistograms        []metric.Float64Histogram
+	apmPlusToolTokenUsageHistograms []metric.Float64Histogram
 )
 
 // RegisterLocalMetrics initializes the metrics system with a local isolated MeterProvider.
