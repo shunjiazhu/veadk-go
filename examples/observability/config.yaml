@@ -1,6 +1,6 @@
 observability:
   opentelemetry:
-    enable_meter_provider: true
+    enable_metrics: true
     stdout:
       enable: true
     file: 

@@ -270,17 +270,12 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 	if resp.Partial && currentAcc == nil && resp.Content != nil {
 		// This is the very first chunk
 		if !startTime.IsZero() {
-			latency := time.Since(startTime).Seconds()
+			_ = time.Since(startTime).Seconds()
 			_ = ctx.State().Set(stateKeyFirstTokenTime, time.Now())
 
-			metricAttrs := []attribute.KeyValue{
-				attribute.String(AttrGenAISystem, "veadk"),
-				attribute.String("gen_ai_response_model", finalModelName),
-				attribute.String("gen_ai_operation_name", "chat"),
-				attribute.String("gen_ai_operation_type", "llm"),
-			}
 			if p.isMetricsEnabled() {
-				RecordStreamingTimeToFirstToken(context.Context(ctx), latency, metricAttrs...)
+				// TODO: Alignment with Python - Python currently has these as TODOs
+				// RecordStreamingTimeToFirstToken(context.Context(ctx), latency, metricAttrs...)
 			}
 		}
 	}
@@ -340,18 +335,11 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 		firstTokenTimeVal, _ := ctx.State().Get(stateKeyFirstTokenTime)
 
 		if startTime, ok := startTimeVal.(time.Time); ok {
-			totalDuration := time.Since(startTime).Seconds()
-
-			metricAttrs := []attribute.KeyValue{
-				attribute.String(AttrGenAISystem, "veadk"),
-				attribute.String("gen_ai_response_model", finalModelName),
-				attribute.String("gen_ai_operation_name", "chat"),
-				attribute.String("gen_ai_operation_type", "llm"),
-			}
+			_ = time.Since(startTime).Seconds()
 
 			if p.isMetricsEnabled() {
-				// Streaming Time to Generate
-				RecordStreamingTimeToGenerate(context.Context(ctx), totalDuration, metricAttrs...)
+				// TODO: Alignment with Python - Python currently has these as TODOs
+				// RecordStreamingTimeToGenerate(context.Context(ctx), totalDuration, metricAttrs...)
 			}
 
 			// Time Per Output Token
@@ -362,9 +350,10 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 				if lc, ok := lastCandidate.(int64); ok && lc > 0 {
 					generateDuration := time.Since(firstTokenTime).Seconds()
 					if generateDuration > 0 {
-						timePerToken := generateDuration / float64(lc)
+						_ = generateDuration / float64(lc)
 						if p.isMetricsEnabled() {
-							RecordStreamingTimePerOutputToken(context.Context(ctx), timePerToken, metricAttrs...)
+							// TODO: Alignment with Python - Python currently has these as TODOs
+							// RecordStreamingTimePerOutputToken(context.Context(ctx), timePerToken, metricAttrs...)
 						}
 					}
 				}

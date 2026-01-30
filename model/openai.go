@@ -557,6 +557,10 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 		}()
 
 		scanner := bufio.NewScanner(httpResp.Body)
+		// Set a larger buffer for the scanner to handle long SSE lines
+		// const maxScannerBuffer = 1 * 1024 * 1024 // 1MB
+		// scanner.Buffer(make([]byte, 64*1024), maxScannerBuffer)
+
 		var textBuffer strings.Builder
 		var toolCalls []toolCall
 		var finalUsage usage
@@ -616,8 +620,8 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 			}
 
 			if len(delta.ToolCalls) > 0 {
-				for idx, tc := range delta.ToolCalls {
-					targetIdx := idx
+				for _, tc := range delta.ToolCalls {
+					targetIdx := 0
 					if tc.Index != nil {
 						targetIdx = *tc.Index
 					}
@@ -632,6 +636,9 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 					}
 					if tc.Function.Name != "" {
 						toolCalls[targetIdx].Function.Name += tc.Function.Name
+					}
+					if tc.Function.Arguments != "" {
+						toolCalls[targetIdx].Function.Arguments += tc.Function.Arguments
 					}
 				}
 			}

@@ -14,6 +14,8 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/cmd/launcher"
 	"google.golang.org/adk/cmd/launcher/full"
+	"google.golang.org/adk/plugin"
+	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 )
@@ -49,6 +51,9 @@ func main() {
 	config := &launcher.Config{
 		AgentLoader:    agent.NewSingleLoader(a),
 		SessionService: session.InMemoryService(),
+		PluginConfig: runner.PluginConfig{
+			Plugins: []*plugin.Plugin{observability.NewPlugin()},
+		},
 	}
 
 	l := observability.NewObservedLauncher(full.NewLauncher())
