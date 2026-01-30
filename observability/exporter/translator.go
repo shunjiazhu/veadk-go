@@ -118,9 +118,9 @@ func (p *translatedSpan) Parent() oteltrace.SpanContext {
 
 func (p *translatedSpan) InstrumentationScope() instrumentation.Scope {
 	scope := p.ReadOnlySpan.InstrumentationScope()
-	if scope.Name == "gcp.vertex.agent" || scope.Name == "veadk" {
+	// github.com/volcengine/veadk-go is the InstrumentationName defined in observability/constant.go
+	if scope.Name == "gcp.vertex.agent" || scope.Name == "veadk" || scope.Name == "github.com/volcengine/veadk-go" {
 		scope.Name = "openinference.instrumentation.veadk"
-		// Version detection is handled in the main package to avoid repetition
 	}
 	return scope
 }

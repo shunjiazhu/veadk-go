@@ -124,10 +124,12 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 	// Record start time for metrics
 	_ = ctx.State().Set(stateKeyStartTime, time.Now())
 
-	// Link back to the ADK internal span if it's there
+	// Link back to the ADK internal span if it's there.
+	// This records the ID of the span started by the ADK framework, which we
+	// often bypass to maintain a cleaner hierarchy in our manual spans.
 	adkSpan := trace.SpanFromContext(context.Context(ctx))
 	if adkSpan.SpanContext().IsValid() {
-		span.SetAttributes(attribute.String("adk.parent_span_id", adkSpan.SpanContext().SpanID().String()))
+		span.SetAttributes(attribute.String("adk.internal_span_id", adkSpan.SpanContext().SpanID().String()))
 	}
 
 	// Store model name for AfterModel
@@ -755,16 +757,15 @@ func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.
 
 // AfterAgent is called after an agent execution.
 func (p *adkObservabilityPlugin) AfterAgent(ctx agent.CallbackContext) (*genai.Content, error) {
-	// 1. Clean up from global map
-	adkSpan := trace.SpanFromContext(context.Context(ctx))
-	if adkSpan.SpanContext().IsValid() {
-		exporter.UnregisterAgentSpanContext(adkSpan.SpanContext().TraceID())
-	}
-
-	// 2. End the span
+	// 1. End the span
 	if s, _ := ctx.State().Get(stateKeyAgentSpan); s != nil {
 		span := s.(trace.Span)
 		if span.IsRecording() {
+			// Clean up from global map using the actual span's TraceID
+			sc := span.SpanContext()
+			if sc.IsValid() {
+				exporter.UnregisterAgentSpanContext(sc.TraceID())
+			}
 			span.End()
 		}
 	}

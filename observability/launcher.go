@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"google.golang.org/adk/cmd/launcher"
 	"google.golang.org/adk/session"
 )
@@ -41,21 +42,49 @@ func (l *ObservedLauncher) Execute(ctx context.Context, config *launcher.Config,
 	userID := GetUserId(ctx)
 	sessionID := GetSessionId(ctx)
 
-	// Since launcher.Execute blocks, we wrap it in a function that yields a dummy event or error.
-	tracedEvents := TraceRun(ctx, userID, sessionID, args, func(tracedCtx context.Context) iter.Seq2[*session.Event, error] {
-		return func(yield func(*session.Event, error) bool) {
-			err := l.Launcher.Execute(tracedCtx, config, args)
-			if err != nil {
-				yield(nil, err)
-			}
-		}
-	})
+	// 1. Start the root 'invocation' span.
+	// We start it here instead of wrapping in an iterator to ensure it covers
+	// the full execution and ends correctly when Execute returns.
+	tracedCtx, span := StartSpan(ctx, SpanInvocation)
+	defer span.End()
 
-	// Consume the events (Execute usually runs a server or a CLI loop)
-	for _, err := range tracedEvents {
-		return err
+	// 2. Set root attributes
+	SetCommonAttributes(tracedCtx, span)
+	SetWorkflowAttributes(span)
+	if jsonIn, err := json.Marshal(args); err == nil {
+		span.SetAttributes(attribute.String(AttrGenAIInputValue, string(jsonIn)))
 	}
-	return nil
+
+	// 3. Setup IDs in context
+	tracedCtx = WithUserId(tracedCtx, userID)
+	tracedCtx = WithSessionId(tracedCtx, sessionID)
+
+	startTime := time.Now()
+
+	// 4. Run the base launcher. This is usually a blocking call.
+	err := l.Launcher.Execute(tracedCtx, config, args)
+
+	// 5. Force flush spans before ending the root span to ensure children are sent
+	tp := otel.GetTracerProvider()
+	if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {
+		_ = sdkTP.ForceFlush(tracedCtx)
+	}
+
+	// 6. Record final metrics
+	elapsed := time.Since(startTime).Seconds()
+	metricAttrs := []attribute.KeyValue{
+		attribute.String("gen_ai_operation_name", "chain"),
+		attribute.String("gen_ai_operation_type", "workflow"),
+		attribute.String("gen_ai.system", "veadk"),
+	}
+	RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
+	RecordAPMPlusSpanLatency(context.Background(), elapsed, metricAttrs...)
+
+	if err != nil {
+		span.RecordError(err)
+	}
+
+	return err
 }
 
 // TraceRun is a helper to wrap runner.Run calls with an 'invocation' span.
