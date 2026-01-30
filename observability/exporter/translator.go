@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	"go.opentelemetry.io/otel/sdk/trace"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -46,12 +47,23 @@ type ADKTranslatedExporter struct {
 }
 
 func (e *ADKTranslatedExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
-	translated := make([]trace.ReadOnlySpan, len(spans))
-	for i, s := range spans {
-		translated[i] = &translatedSpan{ReadOnlySpan: s}
+	translated := make([]trace.ReadOnlySpan, 0, len(spans))
+	for _, s := range spans {
+		// Suppress duplicate ADK internal spans that we already cover with manual long-running spans.
+		// Standard ADK scope name is "gcp.vertex.agent".
+		if s.InstrumentationScope().Name == "gcp.vertex.agent" {
+			name := s.Name()
+			if name == "call_llm" {
+				continue
+			}
+		}
+
+		translated = append(translated, &translatedSpan{ReadOnlySpan: s})
+	}
+	if len(translated) == 0 {
+		return nil
 	}
 	return e.SpanExporter.ExportSpans(ctx, translated)
-	// return e.SpanExporter.ExportSpans(ctx, spans)
 }
 
 // translatedSpan wraps a ReadOnlySpan and intercepts calls to Attributes().
@@ -83,6 +95,25 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 	}
 
 	return newAttrs
+}
+
+func (p *translatedSpan) Parent() oteltrace.SpanContext {
+	parent := p.ReadOnlySpan.Parent()
+	sc := p.ReadOnlySpan.SpanContext()
+
+	// If this is an ADK internal span (call_llm, execute_tool)
+	// and we have an active 'invoke_agent' span for this trace,
+	// we force the parent to be that agent span.
+	if p.ReadOnlySpan.InstrumentationScope().Name == "gcp.vertex.agent" {
+		if agentSC, ok := GetAgentSpanContext(sc.TraceID()); ok {
+			// Ensure we don't reparent the agent span to itself
+			if agentSC.SpanID() != sc.SpanID() {
+				return agentSC
+			}
+		}
+	}
+
+	return parent
 }
 
 func (p *translatedSpan) InstrumentationScope() instrumentation.Scope {

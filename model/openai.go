@@ -558,8 +558,8 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 
 		scanner := bufio.NewScanner(httpResp.Body)
 		// Set a larger buffer for the scanner to handle long SSE lines
-		// const maxScannerBuffer = 1 * 1024 * 1024 // 1MB
-		// scanner.Buffer(make([]byte, 64*1024), maxScannerBuffer)
+		const maxScannerBuffer = 1 * 1024 * 1024 // 1MB
+		scanner.Buffer(make([]byte, 64*1024), maxScannerBuffer)
 
 		var textBuffer strings.Builder
 		var toolCalls []toolCall

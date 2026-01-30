@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/volcengine/veadk-go/configs"
+	"github.com/volcengine/veadk-go/observability/exporter"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -41,6 +42,8 @@ const (
 	stateKeyModelName       = "veadk.observability.model_name"
 	stateKeyStreamingOutput = "veadk.observability.streaming_output"
 	stateKeyStreamingSpan   = "veadk.observability.streaming_span"
+	stateKeyAgentSpan       = "veadk.observability.agent_span"
+	stateKeyAgentCtx        = "veadk.observability.agent_ctx"
 	stateKeyStartTime       = "veadk.observability.start_time"
 	stateKeyFirstTokenTime  = "veadk.observability.first_token_time"
 )
@@ -106,26 +109,31 @@ func (p *adkObservabilityPlugin) isMetricsEnabled() bool {
 
 // BeforeModel is called before the LLM is called.
 func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
-	// 1. Get the parent span from ADK context
-	parentSpan := trace.SpanFromContext(context.Context(ctx))
+	// 1. Get the agent context from state to maintain hierarchy for our manual span
+	parentCtx := context.Context(ctx)
+	if actx, _ := ctx.State().Get(stateKeyAgentCtx); actx != nil {
+		parentCtx = actx.(context.Context)
+	}
 
 	// 2. Start our OWN span to cover the full duration of the call (including streaming).
 	// ADK's "call_llm" span will be closed prematurely by the framework on the first chunk.
-	_, span := p.tracer.Start(context.Context(ctx), "chat")
+	// Align with Python: name is "call_llm"
+	newCtx, span := p.tracer.Start(parentCtx, SpanCallLLM)
 	_ = ctx.State().Set(stateKeyStreamingSpan, span)
 
 	// Record start time for metrics
 	_ = ctx.State().Set(stateKeyStartTime, time.Now())
 
 	// Link back to the ADK internal span if it's there
-	if parentSpan.SpanContext().IsValid() {
-		span.SetAttributes(attribute.String("adk.parent_span_id", parentSpan.SpanContext().SpanID().String()))
+	adkSpan := trace.SpanFromContext(context.Context(ctx))
+	if adkSpan.SpanContext().IsValid() {
+		span.SetAttributes(attribute.String("adk.parent_span_id", adkSpan.SpanContext().SpanID().String()))
 	}
 
 	// Store model name for AfterModel
 	_ = ctx.State().Set(stateKeyModelName, req.Model)
 
-	SetCommonAttributes(context.Context(ctx), span)
+	SetCommonAttributes(newCtx, span)
 	// Set GenAI standard span attributes
 	SetLLMAttributes(span)
 
@@ -660,9 +668,11 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 		return nil, nil
 	}
 
+	activeCtx := context.Context(ctx)
+
 	// Set GenAI standard span attributes
 	SetToolAttributes(span, tool.Name())
-	SetCommonAttributes(context.Context(ctx), span)
+	SetCommonAttributes(activeCtx, span)
 
 	// Enrich standard attributes
 	argsJSON, _ := json.Marshal(args)
@@ -712,22 +722,32 @@ func (p *adkObservabilityPlugin) BeforeTool(ctx tool.Context, tool tool.Tool, ar
 
 // BeforeAgent is called before an agent execution.
 func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.Content, error) {
-	span := trace.SpanFromContext(context.Context(ctx))
-	if !span.IsRecording() {
-		return nil, nil
-	}
-
-	// Set GenAI standard span attributes
 	agentName := ctx.AgentName()
 	if agentName == "" {
 		agentName = FallbackAgentName
 	}
 
-	// Always set agent attributes
-	SetAgentAttributes(span, agentName)
-	SetCommonAttributes(context.Context(ctx), span)
+	// 1. Start the 'invoke_agent' span manually.
+	// Since we can't easily wrap the Agent interface due to internal methods,
+	// we use the plugin to start our span.
+	parentCtx := context.Context(ctx)
+	spanName := SpanInvokeAgent + " " + agentName
+	newCtx, span := p.tracer.Start(parentCtx, spanName)
 
-	// If this is the root agent (or a workflow agent), set workflow attributes.
+	// 2. Store in state for AfterAgent
+	_ = ctx.State().Set(stateKeyAgentSpan, span)
+	_ = ctx.State().Set(stateKeyAgentCtx, newCtx)
+
+	// 3. Register this span as the current parent for ADK internal spans in this trace.
+	// This is the key to fixing hierarchy perfectly.
+	sc := span.SpanContext()
+	if sc.IsValid() {
+		exporter.RegisterAgentSpanContext(sc.TraceID(), sc)
+	}
+
+	// 4. Set attributes
+	SetAgentAttributes(span, agentName)
+	SetCommonAttributes(newCtx, span)
 	SetWorkflowAttributes(span)
 
 	return nil, nil
@@ -735,9 +755,18 @@ func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.
 
 // AfterAgent is called after an agent execution.
 func (p *adkObservabilityPlugin) AfterAgent(ctx agent.CallbackContext) (*genai.Content, error) {
-	span := trace.SpanFromContext(context.Context(ctx))
-	if !span.IsRecording() {
-		return nil, nil
+	// 1. Clean up from global map
+	adkSpan := trace.SpanFromContext(context.Context(ctx))
+	if adkSpan.SpanContext().IsValid() {
+		exporter.UnregisterAgentSpanContext(adkSpan.SpanContext().TraceID())
+	}
+
+	// 2. End the span
+	if s, _ := ctx.State().Get(stateKeyAgentSpan); s != nil {
+		span := s.(trace.Span)
+		if span.IsRecording() {
+			span.End()
+		}
 	}
 	return nil, nil
 }
