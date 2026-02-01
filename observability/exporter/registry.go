@@ -22,29 +22,55 @@ import (
 
 var (
 	// agentSpanMap tracks the current active 'invoke_agent' span context per TraceID.
-	// This is used by the exporter to fix the hierarchy of ADK internal spans.
 	agentSpanMap   = make(map[trace.TraceID]trace.SpanContext)
-	agentSpanMutex sync.RWMutex
+	// invocationSpanMap tracks the root 'invocation' span context per TraceID.
+	invocationSpanMap = make(map[trace.TraceID]trace.SpanContext)
+	registryMutex sync.RWMutex
 )
 
 // RegisterAgentSpanContext registers an active 'invoke_agent' span context for a given TraceID.
 func RegisterAgentSpanContext(traceID trace.TraceID, sc trace.SpanContext) {
-	agentSpanMutex.Lock()
-	defer agentSpanMutex.Unlock()
+	registryMutex.Lock()
+	defer registryMutex.Unlock()
 	agentSpanMap[traceID] = sc
 }
 
 // UnregisterAgentSpanContext removes the 'invoke_agent' span context for a given TraceID.
 func UnregisterAgentSpanContext(traceID trace.TraceID) {
-	agentSpanMutex.Lock()
-	defer agentSpanMutex.Unlock()
+	registryMutex.Lock()
+	defer registryMutex.Unlock()
 	delete(agentSpanMap, traceID)
 }
 
 // GetAgentSpanContext retrieves the active 'invoke_agent' span context for a given TraceID.
 func GetAgentSpanContext(traceID trace.TraceID) (trace.SpanContext, bool) {
-	agentSpanMutex.RLock()
-	defer agentSpanMutex.RUnlock()
+	registryMutex.RLock()
+	defer registryMutex.RUnlock()
 	sc, ok := agentSpanMap[traceID]
 	return sc, ok
+}
+
+// RegisterInvocationSpanContext registers the root 'invocation' span context for a given TraceID.
+func RegisterInvocationSpanContext(traceID trace.TraceID, sc trace.SpanContext) {
+	registryMutex.Lock()
+	defer registryMutex.Unlock()
+	invocationSpanMap[traceID] = sc
+}
+
+// UnregisterInvocationSpanContext removes the 'invocation' span context for a given TraceID.
+func UnregisterInvocationSpanContext(traceID trace.TraceID) {
+	registryMutex.Lock()
+	defer registryMutex.Unlock()
+	delete(invocationSpanMap, traceID)
+}
+
+// GetInvocationSpanContexts returns all currently registered invocation span contexts.
+func GetInvocationSpanContexts() []trace.SpanContext {
+	registryMutex.RLock()
+	defer registryMutex.RUnlock()
+	res := make([]trace.SpanContext, 0, len(invocationSpanMap))
+	for _, sc := range invocationSpanMap {
+		res = append(res, sc)
+	}
+	return res
 }

@@ -75,13 +75,34 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 	attrs := p.ReadOnlySpan.Attributes()
 	newAttrs := make([]attribute.KeyValue, 0, len(attrs))
 
+	hasStandardUsage := false
+	for _, kv := range attrs {
+		if kv.Key == "gen_ai.usage" {
+			hasStandardUsage = true
+			break
+		}
+	}
+
 	for _, kv := range attrs {
 		key := string(kv.Key)
 
 		// 1. Map ADK internal attributes if not already present in standard form
 		if strings.HasPrefix(key, "gcp.vertex.agent.") {
-			if targetKey, ok := ADKAttributeKeyMap[key]; ok {
-				newAttrs = append(newAttrs, attribute.KeyValue{Key: attribute.Key(targetKey), Value: kv.Value})
+			targetKey, ok := ADKAttributeKeyMap[key]
+			if ok {
+				// Avoid duplicates if Processor already mapped it
+				alreadyMapped := false
+				if !hasStandardUsage || targetKey != "gen_ai.usage" {
+					for _, na := range newAttrs {
+						if string(na.Key) == targetKey {
+							alreadyMapped = true
+							break
+						}
+					}
+				}
+				if !alreadyMapped {
+					newAttrs = append(newAttrs, attribute.KeyValue{Key: attribute.Key(targetKey), Value: kv.Value})
+				}
 			}
 			continue
 		}
@@ -100,15 +121,27 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 func (p *translatedSpan) Parent() oteltrace.SpanContext {
 	parent := p.ReadOnlySpan.Parent()
 	sc := p.ReadOnlySpan.SpanContext()
+	name := p.ReadOnlySpan.Name()
+	traceID := sc.TraceID()
 
-	// If this is an ADK internal span (call_llm, execute_tool)
-	// and we have an active 'invoke_agent' span for this trace,
-	// we force the parent to be that agent span.
+	// 1. Re-parent ADK internal spans (gcp.vertex.agent) to the current 'invoke_agent' span
 	if p.ReadOnlySpan.InstrumentationScope().Name == "gcp.vertex.agent" {
-		if agentSC, ok := GetAgentSpanContext(sc.TraceID()); ok {
+		if agentSC, ok := GetAgentSpanContext(traceID); ok {
 			// Ensure we don't reparent the agent span to itself
 			if agentSC.SpanID() != sc.SpanID() {
 				return agentSC
+			}
+		}
+	}
+
+	// 2. Re-parent 'invoke_agent' spans to 'invocation' if they are roots
+	if !parent.IsValid() && (name == "invoke_agent" || strings.HasPrefix(name, "invoke_agent:")) {
+		registryMutex.RLock()
+		invSC, ok := invocationSpanMap[traceID]
+		registryMutex.RUnlock()
+		if ok {
+			if invSC.SpanID() != sc.SpanID() {
+				return invSC
 			}
 		}
 	}

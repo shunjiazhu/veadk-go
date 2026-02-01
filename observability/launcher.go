@@ -20,10 +20,12 @@ import (
 	"iter"
 	"time"
 
+	"github.com/volcengine/veadk-go/observability/exporter"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/adk/cmd/launcher"
 	"google.golang.org/adk/session"
 )
@@ -43,10 +45,20 @@ func (l *ObservedLauncher) Execute(ctx context.Context, config *launcher.Config,
 	sessionID := GetSessionId(ctx)
 
 	// 1. Start the root 'invocation' span.
-	// We start it here instead of wrapping in an iterator to ensure it covers
-	// the full execution and ends correctly when Execute returns.
 	tracedCtx, span := StartSpan(ctx, SpanInvocation)
-	defer span.End()
+
+	// Ensure span ends and all data is flushed before returning
+	defer func() {
+		sc := span.SpanContext()
+		if sc.IsValid() {
+			exporter.UnregisterInvocationSpanContext(sc.TraceID())
+		}
+		span.End()
+		tp := otel.GetTracerProvider()
+		if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {
+			_ = sdkTP.ForceFlush(context.Background())
+		}
+	}()
 
 	// 2. Set root attributes
 	SetCommonAttributes(tracedCtx, span)
@@ -64,13 +76,7 @@ func (l *ObservedLauncher) Execute(ctx context.Context, config *launcher.Config,
 	// 4. Run the base launcher. This is usually a blocking call.
 	err := l.Launcher.Execute(tracedCtx, config, args)
 
-	// 5. Force flush spans before ending the root span to ensure children are sent
-	tp := otel.GetTracerProvider()
-	if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {
-		_ = sdkTP.ForceFlush(tracedCtx)
-	}
-
-	// 6. Record final metrics
+	// 5. Record final metrics
 	elapsed := time.Since(startTime).Seconds()
 	metricAttrs := []attribute.KeyValue{
 		attribute.String("gen_ai_operation_name", "chain"),
@@ -115,7 +121,18 @@ func TraceRun(ctx context.Context, userID, sessionID string, msg any, fn func(co
 			}
 			RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
 			RecordAPMPlusSpanLatency(context.Background(), elapsed, metricAttrs...)
+
+			sc := span.SpanContext()
+			if sc.IsValid() {
+				exporter.UnregisterInvocationSpanContext(sc.TraceID())
+			}
 			span.End()
+
+			// Force flush after ending the root span
+			tp := otel.GetTracerProvider()
+			if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {
+				_ = sdkTP.ForceFlush(context.Background())
+			}
 		}()
 		for event, err := range fn(tracedCtx) {
 			if err != nil {
@@ -129,7 +146,13 @@ func TraceRun(ctx context.Context, userID, sessionID string, msg any, fn func(co
 }
 
 func StartSpan(ctx context.Context, name string) (context.Context, trace.Span) {
-	tr := otel.Tracer(InstrumentationName)
-	ctx, span := tr.Start(ctx, name)
+	tp := otel.GetTracerProvider()
+	tr := tp.Tracer(InstrumentationName)
+	// Use SpanKindServer for the root invocation span to mark it as an entry point
+	kind := trace.SpanKindInternal
+	if name == SpanInvocation {
+		kind = trace.SpanKindServer
+	}
+	ctx, span := tr.Start(ctx, name, trace.WithSpanKind(kind))
 	return ctx, span
 }

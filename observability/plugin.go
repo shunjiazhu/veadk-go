@@ -298,6 +298,12 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 			}
 		}
 
+		// If this is the final response, our implementation (like OpenAI) often sends the full content.
+		// We clear our previous accumulation to avoid duplication in the span attributes.
+		if !resp.Partial {
+			currentAcc.Parts = nil
+		}
+
 		// Accumulate parts with merging of adjacent text
 		for _, part := range resp.Content.Parts {
 			// If it's a text part, try to merge with the last part if that was also text
