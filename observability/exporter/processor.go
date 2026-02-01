@@ -1,0 +1,77 @@
+// Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package exporter
+
+import (
+	"context"
+	"strings"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/trace"
+)
+
+// ADKSpanProcessor is a custom SpanProcessor that enriches spans with standard GenAI attributes
+// and handles span lifecycle events for hierarchy management.
+type ADKSpanProcessor struct {
+	trace.SpanProcessor
+}
+
+func NewADKSpanProcessor() *ADKSpanProcessor {
+	return &ADKSpanProcessor{}
+}
+
+func (p *ADKSpanProcessor) OnStart(ctx context.Context, s trace.ReadWriteSpan) {
+	name := s.Name()
+	sc := s.SpanContext()
+	traceID := sc.TraceID()
+
+	// 1. If it's the 'invocation' span, register as root
+	if name == "invocation" {
+		RegisterInvocationSpan(traceID, s)
+	}
+
+	// 2. If it's the 'invoke_agent' span, register its context for re-parenting children
+	if name == "invoke_agent" || strings.HasPrefix(name, "invoke_agent:") {
+		RegisterAgentSpanContext(traceID, sc)
+	}
+
+	// 3. Perform attribute mapping at start time so other processors can see them
+	attrs := s.Attributes()
+	for _, kv := range attrs {
+		key := string(kv.Key)
+		if strings.HasPrefix(key, "gcp.vertex.agent.") {
+			if targetKey, ok := ADKAttributeKeyMap[key]; ok {
+				s.SetAttributes(attribute.KeyValue{Key: attribute.Key(targetKey), Value: kv.Value})
+			}
+		}
+
+		if key == "gen_ai.system" && kv.Value.AsString() == "gcp.vertex.agent" {
+			s.SetAttributes(attribute.String("gen_ai.system", "veadk"))
+		}
+	}
+}
+
+func (p *ADKSpanProcessor) OnEnd(s trace.ReadOnlySpan) {
+	// Optional: cleanup registry on trace end if needed
+	// However, we usually don't know if this is the last span of the trace here.
+}
+
+func (p *ADKSpanProcessor) Shutdown(ctx context.Context) error {
+	return nil
+}
+
+func (p *ADKSpanProcessor) ForceFlush(ctx context.Context) error {
+	return nil
+}

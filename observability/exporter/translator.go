@@ -124,7 +124,17 @@ func (p *translatedSpan) Parent() oteltrace.SpanContext {
 	name := p.ReadOnlySpan.Name()
 	traceID := sc.TraceID()
 
-	// 1. Re-parent ADK internal spans (gcp.vertex.agent) to the current 'invoke_agent' span
+	// 1. Re-parent tool spans to the last 'call_llm' span
+	if name == "execute_tool" || strings.HasPrefix(name, "execute_tool ") {
+		if llmSC, ok := GetLLMSpanContext(traceID); ok {
+			// Ensure we don't reparent the llm span to itself (not possible here but good for safety)
+			if llmSC.SpanID() != sc.SpanID() {
+				return llmSC
+			}
+		}
+	}
+
+	// 2. Re-parent ADK internal spans (gcp.vertex.agent) to the current 'invoke_agent' span
 	if p.ReadOnlySpan.InstrumentationScope().Name == "gcp.vertex.agent" {
 		if agentSC, ok := GetAgentSpanContext(traceID); ok {
 			// Ensure we don't reparent the agent span to itself
@@ -134,8 +144,8 @@ func (p *translatedSpan) Parent() oteltrace.SpanContext {
 		}
 	}
 
-	// 2. Re-parent 'invoke_agent' spans to 'invocation' if they are roots
-	if !parent.IsValid() && (name == "invoke_agent" || strings.HasPrefix(name, "invoke_agent:")) {
+	// 3. Re-parent 'invoke_agent' spans to 'invocation' if they are roots
+	if !parent.IsValid() && (name == "invoke_agent" || strings.HasPrefix(name, "invoke_agent:") || strings.HasPrefix(name, "invoke_agent ")) {
 		registryMutex.RLock()
 		invSC, ok := invocationSpanMap[traceID]
 		registryMutex.RUnlock()

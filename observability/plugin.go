@@ -121,6 +121,12 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 	newCtx, span := p.tracer.Start(parentCtx, SpanCallLLM)
 	_ = ctx.State().Set(stateKeyStreamingSpan, span)
 
+	// Register LLM span context for re-parenting subsequent tools
+	sc := span.SpanContext()
+	if sc.IsValid() {
+		exporter.RegisterLLMSpanContext(sc.TraceID(), sc)
+	}
+
 	// Record start time for metrics
 	_ = ctx.State().Set(stateKeyStartTime, time.Now())
 
@@ -300,7 +306,8 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 
 		// If this is the final response, our implementation (like OpenAI) often sends the full content.
 		// We clear our previous accumulation to avoid duplication in the span attributes.
-		if !resp.Partial {
+		// We only do this if the final response actually contains content.
+		if !resp.Partial && resp.Content != nil && len(resp.Content.Parts) > 0 {
 			currentAcc.Parts = nil
 		}
 

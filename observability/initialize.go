@@ -190,6 +190,10 @@ func InitializeWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig)
 func Shutdown(ctx context.Context) error {
 	var errs []error
 
+	// 0. End all active root invocation spans to ensure they are recorded and flushed.
+	// This handles cases like Ctrl+C or premature exit where defer blocks might not run.
+	exporter.EndAllInvocationSpans()
+
 	// 1. Shutdown TracerProvider
 	tp := otel.GetTracerProvider()
 	if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {

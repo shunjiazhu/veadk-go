@@ -51,7 +51,7 @@ func (l *ObservedLauncher) Execute(ctx context.Context, config *launcher.Config,
 	defer func() {
 		sc := span.SpanContext()
 		if sc.IsValid() {
-			exporter.UnregisterInvocationSpanContext(sc.TraceID())
+			exporter.UnregisterInvocationSpan(sc.TraceID())
 		}
 		span.End()
 		tp := otel.GetTracerProvider()
@@ -124,7 +124,7 @@ func TraceRun(ctx context.Context, userID, sessionID string, msg any, fn func(co
 
 			sc := span.SpanContext()
 			if sc.IsValid() {
-				exporter.UnregisterInvocationSpanContext(sc.TraceID())
+				exporter.UnregisterInvocationSpan(sc.TraceID())
 			}
 			span.End()
 

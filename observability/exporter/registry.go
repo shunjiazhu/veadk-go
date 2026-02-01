@@ -25,7 +25,11 @@ var (
 	agentSpanMap   = make(map[trace.TraceID]trace.SpanContext)
 	// invocationSpanMap tracks the root 'invocation' span context per TraceID.
 	invocationSpanMap = make(map[trace.TraceID]trace.SpanContext)
-	registryMutex sync.RWMutex
+	// activeInvocationSpans tracks the actual span objects to ensure they can be ended on shutdown.
+	activeInvocationSpans = make(map[trace.TraceID]trace.Span)
+	// lastLLMSpanMap tracks the last 'call_llm' span context per TraceID for re-parenting tools.
+	lastLLMSpanMap = make(map[trace.TraceID]trace.SpanContext)
+	registryMutex     sync.RWMutex
 )
 
 // RegisterAgentSpanContext registers an active 'invoke_agent' span context for a given TraceID.
@@ -50,18 +54,56 @@ func GetAgentSpanContext(traceID trace.TraceID) (trace.SpanContext, bool) {
 	return sc, ok
 }
 
-// RegisterInvocationSpanContext registers the root 'invocation' span context for a given TraceID.
-func RegisterInvocationSpanContext(traceID trace.TraceID, sc trace.SpanContext) {
+// RegisterLLMSpanContext registers the last 'call_llm' span context for a given TraceID.
+func RegisterLLMSpanContext(traceID trace.TraceID, sc trace.SpanContext) {
 	registryMutex.Lock()
 	defer registryMutex.Unlock()
-	invocationSpanMap[traceID] = sc
+	lastLLMSpanMap[traceID] = sc
 }
 
-// UnregisterInvocationSpanContext removes the 'invocation' span context for a given TraceID.
-func UnregisterInvocationSpanContext(traceID trace.TraceID) {
+// UnregisterLLMSpanContext removes the last 'call_llm' span context for a given TraceID.
+func UnregisterLLMSpanContext(traceID trace.TraceID) {
+	registryMutex.Lock()
+	defer registryMutex.Unlock()
+	delete(lastLLMSpanMap, traceID)
+}
+
+// GetLLMSpanContext retrieves the last 'call_llm' span context for a given TraceID.
+func GetLLMSpanContext(traceID trace.TraceID) (trace.SpanContext, bool) {
+	registryMutex.RLock()
+	defer registryMutex.RUnlock()
+	sc, ok := lastLLMSpanMap[traceID]
+	return sc, ok
+}
+
+// RegisterInvocationSpan registers the root 'invocation' span for a given TraceID.
+func RegisterInvocationSpan(traceID trace.TraceID, span trace.Span) {
+	registryMutex.Lock()
+	defer registryMutex.Unlock()
+	invocationSpanMap[traceID] = span.SpanContext()
+	activeInvocationSpans[traceID] = span
+}
+
+// UnregisterInvocationSpan removes the 'invocation' span for a given TraceID.
+func UnregisterInvocationSpan(traceID trace.TraceID) {
 	registryMutex.Lock()
 	defer registryMutex.Unlock()
 	delete(invocationSpanMap, traceID)
+	delete(activeInvocationSpans, traceID)
+}
+
+// EndAllInvocationSpans ends all currently active invocation spans.
+// This is used during graceful shutdown to ensure the root spans are closed and flushed.
+func EndAllInvocationSpans() {
+	registryMutex.Lock()
+	defer registryMutex.Unlock()
+	for id, span := range activeInvocationSpans {
+		if span.IsRecording() {
+			span.End()
+		}
+		delete(activeInvocationSpans, id)
+		delete(invocationSpanMap, id)
+	}
 }
 
 // GetInvocationSpanContexts returns all currently registered invocation span contexts.
