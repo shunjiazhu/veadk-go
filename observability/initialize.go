@@ -64,23 +64,6 @@ func Init(ctx context.Context, cfg *configs.ObservabilityConfig) error {
 	return err
 }
 
-// initWithConfig automatically initializes the observability system based on the provided configuration.
-// It creates the appropriate exporter and calls RegisterExporter.
-func initWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	var errs []error
-	err := initializeTraceProvider(ctx, cfg)
-	if err != nil {
-		errs = append(errs, err)
-	}
-
-	err = initializeMeterProvider(ctx, cfg)
-	if err != nil {
-		errs = append(errs, err)
-	}
-
-	return errors.Join(errs...)
-}
-
 // Shutdown shuts down the observability system, flushing all spans and metrics.
 func Shutdown(ctx context.Context) error {
 	var errs []error
@@ -118,6 +101,23 @@ func Shutdown(ctx context.Context) error {
 		if err := globalMeterProvider.Shutdown(ctx); err != nil {
 			errs = append(errs, err)
 		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// initWithConfig automatically initializes the observability system based on the provided configuration.
+// It creates the appropriate exporter and calls RegisterExporter.
+func initWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+	var errs []error
+	err := initializeTraceProvider(ctx, cfg)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	err = initializeMeterProvider(ctx, cfg)
+	if err != nil {
+		errs = append(errs, err)
 	}
 
 	return errors.Join(errs...)
@@ -186,7 +186,6 @@ func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) err
 		return err
 	}
 
-	telemetry.RegisterSpanProcessor(exporter.NewVeADKSpanProcessor())
 	AddSpanExporter(exp)
 	return nil
 }
@@ -200,7 +199,7 @@ func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) er
 	}
 
 	if globalExp != nil {
-		setGlobalTracerProvider(globalExp, exporter.NewVeADKSpanProcessor())
+		setGlobalTracerProvider(globalExp)
 	}
 	return nil
 }

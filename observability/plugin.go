@@ -34,32 +34,47 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/volcengine/veadk-go/configs"
-	"github.com/volcengine/veadk-go/log"
 	"github.com/volcengine/veadk-go/observability/exporter"
 )
+
+const (
+	stateKeyMetadata        = "veadk.observability.metadata"
+	stateKeyStreamingOutput = "veadk.observability.streaming_output"
+	stateKeyStreamingSpan   = "veadk.observability.streaming_span"
+	stateKeyAgentSpan       = "veadk.observability.agent_span"
+	stateKeyAgentCtx        = "veadk.observability.agent_ctx"
+	stateKeyInvocationSpan  = "veadk.observability.invocation_span"
+	stateKeyInvocationCtx   = "veadk.observability.invocation_ctx"
+)
+
+// spanMetadata groups various observational data points in a single structure
+// to keep the ADK State clean.
+type spanMetadata struct {
+	StartTime           time.Time
+	FirstTokenTime      time.Time
+	PromptTokens        int64
+	CandidateTokens     int64
+	TotalTokens         int64
+	PrevPromptTokens    int64
+	PrevCandidateTokens int64
+	PrevTotalTokens     int64
+	ModelName           string
+}
 
 // NewPlugin creates a new observability plugin for ADK.
 // It returns a *plugin.Plugin that can be registered in launcher.Config or agent.Config.
 func NewPlugin(opts ...Option) *plugin.Plugin {
 	// Ensure observability system is initialized.
 	// This will use default configuration or environment variables.
-	observabilityConfig := configs.GetGlobalConfig().Observability.Clone()
-	// Apply options
-	for _, opt := range opts {
-		opt(observabilityConfig)
-	}
+	_ = Init(context.Background(), nil)
 
 	p := &adkObservabilityPlugin{
-		config: observabilityConfig,
+		tracer: otel.Tracer(InstrumentationName),
 	}
 
-	err := Init(context.Background(), observabilityConfig)
-	if err != nil {
-		log.Error("Init observability failed", "error", err)
-		return nil
+	for _, opt := range opts {
+		opt(p)
 	}
-
-	p.tracer = otel.Tracer(InstrumentationName)
 
 	pluginInstance, _ := plugin.New(plugin.Config{
 		Name:                "veadk-observability",
@@ -76,32 +91,39 @@ func NewPlugin(opts ...Option) *plugin.Plugin {
 }
 
 // Option defines a functional option for the ADKObservabilityPlugin.
-type Option func(config *configs.ObservabilityConfig)
+type Option func(*adkObservabilityPlugin)
 
 // WithEnableMetrics creates an Option to manually control metrics recording.
 func WithEnableMetrics(enable bool) Option {
-	return func(cfg *configs.ObservabilityConfig) {
+	return func(p *adkObservabilityPlugin) {
 		enableVal := enable
-		cfg.OpenTelemetry.EnableMetrics = &enableVal
+		p.config.EnableMetrics = &enableVal
 	}
 }
 
 type adkObservabilityPlugin struct {
-	config *configs.ObservabilityConfig
+	tracer trace.Tracer
+	config PluginConfig
+}
 
-	tracer trace.Tracer // global tracer
+// PluginConfig defines the internal configuration for the ADKObservabilityPlugin.
+type PluginConfig struct {
+	// EnableMetrics allows manual control over whether metrics are recorded for this plugin.
+	// If nil, it will follow the global configuration (EnableMetrics).
+	EnableMetrics *bool
 }
 
 func (p *adkObservabilityPlugin) isMetricsEnabled() bool {
-	if p.config == nil || p.config.OpenTelemetry == nil {
-		return false
+	if p.config.EnableMetrics != nil {
+		return *p.config.EnableMetrics
 	}
-
-	if p.config.OpenTelemetry.EnableMetrics != nil {
-		return *p.config.OpenTelemetry.EnableMetrics
+	// Fallback to global config
+	globalConfig := configs.GetGlobalConfig()
+	if globalConfig != nil && globalConfig.Observability != nil && globalConfig.Observability.OpenTelemetry != nil {
+		cfg := globalConfig.Observability.OpenTelemetry
+		return cfg.EnableMetrics == nil || *cfg.EnableMetrics
 	}
-
-	return false
+	return true // Default to true if no config found
 }
 
 // BeforeRun is called before an agent run starts.
@@ -158,6 +180,8 @@ func (p *adkObservabilityPlugin) AfterRun(ctx agent.InvocationContext) {
 			sc := span.SpanContext()
 			if sc.IsValid() {
 				exporter.UnregisterInvocationSpan(sc.TraceID())
+				exporter.UnregisterLLMSpanContext(sc.TraceID())
+				exporter.UnregisterAgentSpanContext(sc.TraceID())
 			}
 
 			// Capture final output if available
@@ -200,6 +224,9 @@ func (p *adkObservabilityPlugin) AfterRun(ctx agent.InvocationContext) {
 
 // BeforeModel is called before the LLM is called.
 func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+	// 0. Ensure request has content (alignment with Ark/OpenAI requirements)
+	p.maybeAppendUserContent(req)
+
 	// 1. Get the parent context from state to maintain hierarchy
 	parentCtx := context.Context(ctx)
 	if actx, _ := ctx.State().Get(stateKeyAgentCtx); actx != nil {
@@ -378,9 +405,14 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 			p.storeSpanMetadata(ctx.State(), meta)
 
 			if p.isMetricsEnabled() {
-				// TODO: Alignment with Python - Python currently has these as TODOs
-				// latency := time.Since(meta.FirstTokenTime)
-				// RecordStreamingTimeToFirstToken(context.Context(ctx), latency, metricAttrs...)
+				latency := time.Since(meta.StartTime).Seconds()
+				metricAttrs := []attribute.KeyValue{
+					attribute.String(AttrGenAISystem, "veadk"),
+					attribute.String("gen_ai_response_model", meta.ModelName),
+					attribute.String("gen_ai_operation_name", "chat"),
+					attribute.String("gen_ai_operation_type", "llm"),
+				}
+				RecordStreamingTimeToFirstToken(context.Context(ctx), latency, metricAttrs...)
 			}
 		}
 	}
@@ -444,11 +476,17 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 	// Metrics: Time to Generate (Streaming Only) & Time Per Output Token
 	if !resp.Partial && currentAcc != nil {
 		if !meta.StartTime.IsZero() {
-			_ = time.Since(meta.StartTime).Seconds()
+			totalDuration := time.Since(meta.StartTime).Seconds()
+
+			metricAttrs := []attribute.KeyValue{
+				attribute.String(AttrGenAISystem, "veadk"),
+				attribute.String("gen_ai_response_model", finalModelName),
+				attribute.String("gen_ai_operation_name", "chat"),
+				attribute.String("gen_ai_operation_type", "llm"),
+			}
 
 			if p.isMetricsEnabled() {
-				// TODO: Alignment with Python - Python currently has these as TODOs
-				// RecordStreamingTimeToGenerate(context.Context(ctx), totalDuration, metricAttrs...)
+				RecordStreamingTimeToGenerate(context.Context(ctx), totalDuration, metricAttrs...)
 			}
 
 			// Time Per Output Token
@@ -458,10 +496,9 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 				if meta.CandidateTokens > 0 {
 					generateDuration := time.Since(meta.FirstTokenTime).Seconds()
 					if generateDuration > 0 {
-						_ = generateDuration / float64(meta.CandidateTokens)
+						timePerToken := generateDuration / float64(meta.CandidateTokens)
 						if p.isMetricsEnabled() {
-							// TODO: Alignment with Python - Python currently has these as TODOs
-							// RecordStreamingTimePerOutputToken(context.Context(ctx), timePerToken, metricAttrs...)
+							RecordStreamingTimePerOutputToken(context.Context(ctx), timePerToken, metricAttrs...)
 						}
 					}
 				}
@@ -568,11 +605,6 @@ func (p *adkObservabilityPlugin) handleUsage(ctx agent.CallbackContext, span tra
 
 func (p *adkObservabilityPlugin) addUserMessageEvents(span trace.Span, ctx agent.CallbackContext, req *model.LLMRequest) {
 	// Add gen_ai.user.message event
-	// Use agent/app/user info if available from context
-	// Since agent.CallbackContext might not give easy access to all metadata,
-	// we will try to mimic Python behavior which uses stored context.
-	// For now, we will just dump what we have in request if possible.
-
 	for _, content := range req.Contents {
 		if content.Role != "user" {
 			continue
@@ -584,7 +616,6 @@ func (p *adkObservabilityPlugin) addUserMessageEvents(span trace.Span, ctx agent
 				attrs = append(attrs, attribute.String("parts."+strconv.Itoa(i)+".type", "text"))
 				attrs = append(attrs, attribute.String("parts."+strconv.Itoa(i)+".content", part.Text))
 			}
-			// TODO: Handle other part types if needed for full alignment
 
 			if len(attrs) > 0 {
 				span.AddEvent("gen_ai.user.message", trace.WithAttributes(attrs...))
@@ -653,8 +684,6 @@ func (p *adkObservabilityPlugin) extractMessages(req *model.LLMRequest) []map[st
 			msg["tool_calls"] = toolCalls
 		}
 		if len(toolResponses) > 0 {
-			// In standard GenAI, tool responses are often represented separate messages or differently.
-			// Alignment with veadk-python usually means following their structure.
 			msg["tool_responses"] = toolResponses
 		}
 
@@ -666,7 +695,7 @@ func (p *adkObservabilityPlugin) extractMessages(req *model.LLMRequest) []map[st
 func (p *adkObservabilityPlugin) flattenPrompt(messages []map[string]any) []attribute.KeyValue {
 	var attrs []attribute.KeyValue
 	for i, msg := range messages {
-		prefix := "gen_ai.prompt." + strings.Repeat("0", 0) + strconv.Itoa(i) // simplest numbering
+		prefix := "gen_ai.prompt." + strconv.Itoa(i)
 		if role, ok := msg["role"].(string); ok {
 			attrs = append(attrs, attribute.String(prefix+".role", role))
 		}
@@ -714,7 +743,7 @@ func (p *adkObservabilityPlugin) flattenPrompt(messages []map[string]any) []attr
 
 func (p *adkObservabilityPlugin) flattenCompletion(content *genai.Content) []attribute.KeyValue {
 	var attrs []attribute.KeyValue
-	prefix := "gen_ai.completion.0" // usually only one choice in ADK responses
+	prefix := "gen_ai.completion.0"
 
 	role := content.Role
 	if role == "model" {
@@ -743,17 +772,6 @@ func (p *adkObservabilityPlugin) flattenCompletion(content *genai.Content) []att
 	}
 
 	return attrs
-}
-
-func safeMarshal(v any) string {
-	if v == nil {
-		return ""
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "{}"
-	}
-	return string(b)
 }
 
 // AfterTool is called after a tool is executed.
@@ -786,7 +804,7 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 		metricAttrs := []attribute.KeyValue{
 			attribute.String("gen_ai_operation_name", tool.Name()),
 			attribute.String("gen_ai_operation_type", "tool"),
-			attribute.String("gen_ai_system", "veadk"),
+			attribute.String("gen_ai.system", "veadk"),
 		}
 		if p.isMetricsEnabled() {
 			RecordOperationDuration(context.Context(ctx), duration, metricAttrs...)
@@ -831,8 +849,6 @@ func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.
 	}
 
 	// 2. Start the 'invoke_agent' span manually.
-	// Since we can't easily wrap the Agent interface due to internal methods,
-	// we use the plugin to start our span.
 	spanName := SpanInvokeAgent + " " + agentName
 	newCtx, span := p.tracer.Start(parentCtx, spanName)
 
@@ -841,7 +857,6 @@ func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.
 	_ = ctx.State().Set(stateKeyAgentCtx, newCtx)
 
 	// 3. Register this span as the current parent for ADK internal spans in this trace.
-	// This is the key to fixing hierarchy perfectly.
 	sc := span.SpanContext()
 	if sc.IsValid() {
 		exporter.RegisterAgentSpanContext(sc.TraceID(), sc)
@@ -884,26 +899,24 @@ func (p *adkObservabilityPlugin) storeSpanMetadata(state session.State, meta *sp
 	_ = state.Set(stateKeyMetadata, meta)
 }
 
-const (
-	stateKeyMetadata        = "veadk.observability.metadata"
-	stateKeyStreamingOutput = "veadk.observability.streaming_output"
-	stateKeyStreamingSpan   = "veadk.observability.streaming_span"
-	stateKeyAgentSpan       = "veadk.observability.agent_span"
-	stateKeyAgentCtx        = "veadk.observability.agent_ctx"
-	stateKeyInvocationSpan  = "veadk.observability.invocation_span"
-	stateKeyInvocationCtx   = "veadk.observability.invocation_ctx"
-)
+func (p *adkObservabilityPlugin) maybeAppendUserContent(req *model.LLMRequest) {
+	if len(req.Contents) == 0 {
+		req.Contents = append(req.Contents, genai.NewContentFromText("Handle the requests as specified in the System Instruction.", "user"))
+		return
+	}
 
-// spanMetadata groups various observational data points in a single structure
-// to keep the ADK State clean.
-type spanMetadata struct {
-	StartTime           time.Time
-	FirstTokenTime      time.Time
-	PromptTokens        int64
-	CandidateTokens     int64
-	TotalTokens         int64
-	PrevPromptTokens    int64
-	PrevCandidateTokens int64
-	PrevTotalTokens     int64
-	ModelName           string
+	if last := req.Contents[len(req.Contents)-1]; last != nil && last.Role != "user" {
+		req.Contents = append(req.Contents, genai.NewContentFromText("Continue processing previous requests as instructed. Exit or provide a summary if no more outputs are needed.", "user"))
+	}
+}
+
+func safeMarshal(v any) string {
+	if v == nil {
+		return ""
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

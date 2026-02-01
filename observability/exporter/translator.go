@@ -24,6 +24,10 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
+const (
+	spanInvokeAgent = "invoke_agent"
+)
+
 var (
 	// ADKAttributeKeyMap maps ADK internal attribute keys to standard GenAI keys.
 	ADKAttributeKeyMap = map[string]string{
@@ -32,12 +36,6 @@ var (
 		"gcp.vertex.agent.session_id":   "gen_ai.session.id",
 		"gcp.vertex.agent.model":        "gen_ai.response.model",
 		"gcp.vertex.agent.usage":        "gen_ai.usage",
-	}
-
-	// ADKTargetKeyAliases maps standard keys to their legacy or platform-specific aliases.
-	ADKTargetKeyAliases = map[string][]string{
-		"gen_ai.response.model": {"gcp.vertex.agent.model"},
-		"gen_ai.usage":          {"gcp.vertex.agent.usage"},
 	}
 )
 
@@ -49,11 +47,14 @@ type ADKTranslatedExporter struct {
 func (e *ADKTranslatedExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
 	translated := make([]trace.ReadOnlySpan, 0, len(spans))
 	for _, s := range spans {
-		// Suppress duplicate ADK internal spans that we already cover with manual long-running spans.
-		// Standard ADK scope name is "gcp.vertex.agent".
+		// -------------------------------------------------------------------------
+		// [Thin Layer] Filter redundant framework-internal spans.
+		// We filter 'call_llm' spans started by the ADK framework because they
+		// close prematurely on the first chunk of a stream. Our plugin starts
+		// a separate 'call_llm' span that covers the full streaming duration.
+		// -------------------------------------------------------------------------
 		if s.InstrumentationScope().Name == "gcp.vertex.agent" {
-			name := s.Name()
-			if name == "call_llm" {
+			if s.Name() == "call_llm" {
 				continue
 			}
 		}
@@ -124,28 +125,32 @@ func (p *translatedSpan) Parent() oteltrace.SpanContext {
 	name := p.ReadOnlySpan.Name()
 	traceID := sc.TraceID()
 
-	// 1. Re-parent tool spans to the last 'call_llm' span
+	// -------------------------------------------------------------------------
+	// [Thin Layer] Hierarchy Correction.
+	// ADK-go starts internal spans without knowledge of our plugin spans.
+	// We sew them together here to create a clean, logical trace tree.
+	// -------------------------------------------------------------------------
+
+	// 1. Re-parent tool spans to the last 'call_llm' span for better visibility of tool calls.
 	if name == "execute_tool" || strings.HasPrefix(name, "execute_tool ") {
 		if llmSC, ok := GetLLMSpanContext(traceID); ok {
-			// Ensure we don't reparent the llm span to itself (not possible here but good for safety)
 			if llmSC.SpanID() != sc.SpanID() {
 				return llmSC
 			}
 		}
 	}
 
-	// 2. Re-parent ADK internal spans (gcp.vertex.agent) to the current 'invoke_agent' span
+	// 2. Re-parent ADK internal spans (gcp.vertex.agent) to the current 'invoke_agent' span.
 	if p.ReadOnlySpan.InstrumentationScope().Name == "gcp.vertex.agent" {
 		if agentSC, ok := GetAgentSpanContext(traceID); ok {
-			// Ensure we don't reparent the agent span to itself
 			if agentSC.SpanID() != sc.SpanID() {
 				return agentSC
 			}
 		}
 	}
 
-	// 3. Re-parent 'invoke_agent' spans to 'invocation' if they are roots
-	if !parent.IsValid() && (name == "invoke_agent" || strings.HasPrefix(name, "invoke_agent:") || strings.HasPrefix(name, "invoke_agent ")) {
+	// 3. Re-parent 'invoke_agent' spans to the root 'invocation' span.
+	if !parent.IsValid() && (name == spanInvokeAgent || strings.HasPrefix(name, spanInvokeAgent+":") || strings.HasPrefix(name, spanInvokeAgent+" ")) {
 		registryMutex.RLock()
 		invSC, ok := invocationSpanMap[traceID]
 		registryMutex.RUnlock()

@@ -20,16 +20,19 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// [Thin Layer] Span Registry.
+// This registry tracks active span contexts to allow re-parenting across different
+// layers of the ADK framework where context propagation is not available.
 var (
 	// agentSpanMap tracks the current active 'invoke_agent' span context per TraceID.
-	agentSpanMap   = make(map[trace.TraceID]trace.SpanContext)
+	agentSpanMap = make(map[trace.TraceID]trace.SpanContext)
 	// invocationSpanMap tracks the root 'invocation' span context per TraceID.
 	invocationSpanMap = make(map[trace.TraceID]trace.SpanContext)
 	// activeInvocationSpans tracks the actual span objects to ensure they can be ended on shutdown.
 	activeInvocationSpans = make(map[trace.TraceID]trace.Span)
 	// lastLLMSpanMap tracks the last 'call_llm' span context per TraceID for re-parenting tools.
 	lastLLMSpanMap = make(map[trace.TraceID]trace.SpanContext)
-	registryMutex     sync.RWMutex
+	registryMutex  sync.RWMutex
 )
 
 // RegisterAgentSpanContext registers an active 'invoke_agent' span context for a given TraceID.

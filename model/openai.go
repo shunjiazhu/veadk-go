@@ -292,7 +292,6 @@ func (m *openAIModel) convertOpenAIRequest(req *model.LLMRequest) (*openAIReques
 			openaiReq.ResponseFormat = &responseFormat{Type: "json_object"}
 		}
 	}
-
 	// Enable token usage in streaming responses (OpenAI compatible)
 	openaiReq.StreamOptions = &streamOptions{IncludeUsage: true}
 
