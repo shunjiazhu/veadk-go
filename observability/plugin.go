@@ -158,6 +158,8 @@ func (p *adkObservabilityPlugin) AfterRun(ctx agent.InvocationContext) {
 			sc := span.SpanContext()
 			if sc.IsValid() {
 				exporter.UnregisterInvocationSpan(sc.TraceID())
+				exporter.UnregisterAgentSpanContext(sc.TraceID())
+				exporter.UnregisterLLMSpanContext(sc.TraceID())
 			}
 
 			// Capture final output if available
@@ -378,9 +380,15 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 			p.storeSpanMetadata(ctx.State(), meta)
 
 			if p.isMetricsEnabled() {
-				// TODO: Alignment with Python - Python currently has these as TODOs
-				// latency := time.Since(meta.FirstTokenTime)
-				// RecordStreamingTimeToFirstToken(context.Context(ctx), latency, metricAttrs...)
+				// Record streaming time to first token
+				latency := time.Since(meta.StartTime).Seconds()
+				metricAttrs := []attribute.KeyValue{
+					attribute.String(AttrGenAISystem, "veadk"),
+					attribute.String("gen_ai_response_model", finalModelName),
+					attribute.String("gen_ai_operation_name", "chat"),
+					attribute.String("gen_ai_operation_type", "llm"),
+				}
+				RecordStreamingTimeToFirstToken(context.Context(ctx), latency, metricAttrs...)
 			}
 		}
 	}
@@ -453,17 +461,19 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 
 			// Time Per Output Token
 			// Only valid if we have output tokens and we tracked first token time
-			if !meta.FirstTokenTime.IsZero() {
-				// We need total output tokens.
-				if meta.CandidateTokens > 0 {
-					generateDuration := time.Since(meta.FirstTokenTime).Seconds()
-					if generateDuration > 0 {
-						_ = generateDuration / float64(meta.CandidateTokens)
-						if p.isMetricsEnabled() {
-							// TODO: Alignment with Python - Python currently has these as TODOs
-							// RecordStreamingTimePerOutputToken(context.Context(ctx), timePerToken, metricAttrs...)
-						}
-					}
+			if meta.CandidateTokens > 0 {
+				generateDuration := time.Since(meta.FirstTokenTime).Seconds()
+				metricAttrs := []attribute.KeyValue{
+					attribute.String(AttrGenAISystem, "veadk"),
+					attribute.String("gen_ai_response_model", finalModelName),
+					attribute.String("gen_ai_operation_name", "chat"),
+					attribute.String("gen_ai_operation_type", "llm"),
+				}
+				RecordStreamingTimeToGenerate(context.Context(ctx), generateDuration, metricAttrs...)
+
+				if generateDuration > 0 {
+					timePerToken := generateDuration / float64(meta.CandidateTokens)
+					RecordStreamingTimePerOutputToken(context.Context(ctx), timePerToken, metricAttrs...)
 				}
 			}
 		}
@@ -665,8 +675,13 @@ func (p *adkObservabilityPlugin) extractMessages(req *model.LLMRequest) []map[st
 
 func (p *adkObservabilityPlugin) flattenPrompt(messages []map[string]any) []attribute.KeyValue {
 	var attrs []attribute.KeyValue
-	for i, msg := range messages {
-		prefix := "gen_ai.prompt." + strings.Repeat("0", 0) + strconv.Itoa(i) // simplest numbering
+	idx := 0
+	for _, msg := range messages {
+		// In Python, each piece of content/part increments the index.
+		// Since we already merged text parts in extractMessages, we just process each message here.
+		// If we wanted exact parity for multi-part messages, we'd need to change extractMessages.
+		// For now, this is a good approximation that matches the role/content flat structure.
+		prefix := "gen_ai.prompt." + strconv.Itoa(idx)
 		if role, ok := msg["role"].(string); ok {
 			attrs = append(attrs, attribute.String(prefix+".role", role))
 		}
@@ -708,38 +723,33 @@ func (p *adkObservabilityPlugin) flattenPrompt(messages []map[string]any) []attr
 				}
 			}
 		}
+		idx++
 	}
 	return attrs
 }
 
 func (p *adkObservabilityPlugin) flattenCompletion(content *genai.Content) []attribute.KeyValue {
 	var attrs []attribute.KeyValue
-	prefix := "gen_ai.completion.0" // usually only one choice in ADK responses
 
 	role := content.Role
 	if role == "model" {
 		role = "assistant"
 	}
-	attrs = append(attrs, attribute.String(prefix+".role", role))
 
-	var textParts []string
-	var toolCallsCount int
-	for _, part := range content.Parts {
+	for idx, part := range content.Parts {
+		prefix := "gen_ai.completion." + strconv.Itoa(idx)
+		attrs = append(attrs, attribute.String(prefix+".role", role))
+
 		if part.Text != "" {
-			textParts = append(textParts, part.Text)
+			attrs = append(attrs, attribute.String(prefix+".content", part.Text))
 		}
 		if part.FunctionCall != nil {
-			tcPrefix := prefix + ".tool_calls." + strconv.Itoa(toolCallsCount)
+			tcPrefix := prefix + ".tool_calls.0"
 			attrs = append(attrs, attribute.String(tcPrefix+".id", part.FunctionCall.ID))
 			attrs = append(attrs, attribute.String(tcPrefix+".type", "function"))
 			attrs = append(attrs, attribute.String(tcPrefix+".function.name", part.FunctionCall.Name))
 			attrs = append(attrs, attribute.String(tcPrefix+".function.arguments", safeMarshal(part.FunctionCall.Args)))
-			toolCallsCount++
 		}
-	}
-
-	if len(textParts) > 0 {
-		attrs = append(attrs, attribute.String(prefix+".content", strings.Join(textParts, "")))
 	}
 
 	return attrs
@@ -836,7 +846,7 @@ func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.
 	spanName := SpanInvokeAgent + " " + agentName
 	newCtx, span := p.tracer.Start(parentCtx, spanName)
 
-	// 3. Store in state for AfterAgent
+	// 3. Store in state for AfterAgent and children
 	_ = ctx.State().Set(stateKeyAgentSpan, span)
 	_ = ctx.State().Set(stateKeyAgentCtx, newCtx)
 

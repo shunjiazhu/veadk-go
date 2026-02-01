@@ -18,7 +18,6 @@ import (
 	"context"
 	"strings"
 
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -47,20 +46,9 @@ func (p *VeADKSpanProcessor) OnStart(ctx context.Context, s trace.ReadWriteSpan)
 		RegisterAgentSpanContext(traceID, sc)
 	}
 
-	// 3. Perform attribute mapping at start time so other processors can see them
-	attrs := s.Attributes()
-	for _, kv := range attrs {
-		key := string(kv.Key)
-		if strings.HasPrefix(key, "gcp.vertex.agent.") {
-			if targetKey, ok := ADKAttributeKeyMap[key]; ok {
-				s.SetAttributes(attribute.KeyValue{Key: attribute.Key(targetKey), Value: kv.Value})
-			}
-		}
-
-		if key == "gen_ai.system" && kv.Value.AsString() == "gcp.vertex.agent" {
-			s.SetAttributes(attribute.String("gen_ai.system", "veadk"))
-		}
-	}
+	// 3. (Optional) Perform light enrichment if needed at start time.
+	// Most attribute mapping is deferred to the Translator in ExportSpans
+	// to handle attributes added late in the span lifecycle.
 }
 
 func (p *VeADKSpanProcessor) OnEnd(s trace.ReadOnlySpan) {
