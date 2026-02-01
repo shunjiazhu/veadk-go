@@ -21,34 +21,40 @@ import (
 	"strconv"
 	"strings"
 
+	"sync"
+
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
 
 type VeADKConfig struct {
-	Volcengine    *Volcengine          `yaml:"volcengine"`
-	Model         *ModelConfig         `yaml:"model"`
-	Tool          *BuiltinToolConfigs  `yaml:"tools"`
-	PromptPilot   *PromptPilotConfig   `yaml:"prompt_pilot"`
-	TlsConfig     *TLSConfig           `yaml:"tls_config"`
-	Veidentity    *VeIdentityConfig    `yaml:"veidentity"`
-	Database      *DatabaseConfig      `yaml:"database"`
-	LOGGING       *Logging             `yaml:"LOGGING"`
-	Observability *ObservabilityConfig `yaml:"observability"`
+	Volcengine     *Volcengine          `yaml:"volcengine"`
+	Model          *ModelConfig         `yaml:"model"`
+	Tool           *BuiltinToolConfigs  `yaml:"tools"`
+	PromptPilot    *PromptPilotConfig   `yaml:"prompt_pilot"`
+	CozeLoopConfig *CozeLoopConfig      `yaml:"coze_loop"`
+	TlsConfig      *TLSConfig           `yaml:"tls_config"`
+	Veidentity     *VeIdentityConfig    `yaml:"veidentity"`
+	Database       *DatabaseConfig      `yaml:"database"`
+	LOGGING        *Logging             `yaml:"LOGGING"`
+	Observability  *ObservabilityConfig `yaml:"observability"`
 }
 
 type EnvConfigMaptoStruct interface {
 	MapEnvToConfig() // 用于映射环境变量到结构体字段
 }
 
-var globalConfig *VeADKConfig
+var (
+	globalConfig *VeADKConfig
+	configOnce   sync.Once
+)
 
 func GetGlobalConfig() *VeADKConfig {
-	if globalConfig == nil {
+	configOnce.Do(func() {
 		if err := SetupVeADKConfig(); err != nil {
 			panic(err)
 		}
-	}
+	})
 	return globalConfig
 }
 
@@ -70,11 +76,13 @@ func SetupVeADKConfig() error {
 		Tool: &BuiltinToolConfigs{
 			MCPRouter: &MCPRouter{},
 			RunCode:   &RunCode{},
+			LLMShield: &LLMShield{},
 		},
-		PromptPilot: &PromptPilotConfig{},
-		TlsConfig:   &TLSConfig{},
-		Veidentity:  &VeIdentityConfig{},
-		LOGGING:     &Logging{},
+		PromptPilot:    &PromptPilotConfig{},
+		CozeLoopConfig: &CozeLoopConfig{},
+		TlsConfig:      &TLSConfig{},
+		Veidentity:     &VeIdentityConfig{},
+		LOGGING:        &Logging{},
 		Database: &DatabaseConfig{
 			Postgresql: &CommonDatabaseConfig{},
 			Viking:     &VikingConfig{},
@@ -91,6 +99,7 @@ func SetupVeADKConfig() error {
 	globalConfig.Model.MapEnvToConfig()
 	globalConfig.Tool.MapEnvToConfig()
 	globalConfig.PromptPilot.MapEnvToConfig()
+	globalConfig.CozeLoopConfig.MapEnvToConfig()
 	globalConfig.LOGGING.MapEnvToConfig()
 	globalConfig.Database.MapEnvToConfig()
 	globalConfig.Volcengine.MapEnvToConfig()

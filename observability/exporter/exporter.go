@@ -26,15 +26,18 @@ import (
 
 	"github.com/volcengine/veadk-go/configs"
 	"github.com/volcengine/veadk-go/log"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
-	"go.opentelemetry.io/otel/sdk/trace"
 
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	olog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/trace"
 )
 
 const (
@@ -45,6 +48,24 @@ const (
 var (
 	fileWriters sync.Map
 )
+
+func createLogClient(ctx context.Context, url, protocol string, headers map[string]string) (olog.Exporter, error) {
+	if protocol == "" {
+		protocol = os.Getenv(OTELExporterOTLPProtocolEnvKey)
+	}
+
+	if url == "" {
+		return nil, errors.New("OTEL_EXPORTER_OTLP_ENDPOINT is not set")
+	}
+
+	switch {
+	case strings.HasPrefix(protocol, "http"):
+		return otlploghttp.New(ctx, otlploghttp.WithEndpointURL(url), otlploghttp.WithHeaders(headers))
+	default:
+		return otlploggrpc.New(ctx, otlploggrpc.WithEndpointURL(url), otlploggrpc.WithHeaders(headers))
+	}
+
+}
 
 func createTraceClient(ctx context.Context, url, protocol string, headers map[string]string) (trace.SpanExporter, error) {
 	if protocol == "" {
@@ -119,7 +140,7 @@ func NewStdoutExporter() (trace.SpanExporter, error) {
 }
 
 // NewCozeLoopExporter creates an OTLP HTTP exporter for CozeLoop.
-func NewCozeLoopExporter(ctx context.Context, cfg *configs.CozeLoopConfig) (trace.SpanExporter, error) {
+func NewCozeLoopExporter(ctx context.Context, cfg *configs.CozeLoopExporterConfig) (trace.SpanExporter, error) {
 	endpoint := cfg.Endpoint
 	return createTraceClient(ctx, endpoint, "", map[string]string{
 		"authorization":         "Bearer " + cfg.APIKey,
@@ -255,7 +276,7 @@ func NewMetricReader(ctx context.Context, cfg *configs.OpenTelemetryConfig) ([]s
 }
 
 // NewCozeLoopMetricExporter creates an OTLP Metric exporter for CozeLoop.
-func NewCozeLoopMetricExporter(ctx context.Context, cfg *configs.CozeLoopConfig) (sdkmetric.Exporter, error) {
+func NewCozeLoopMetricExporter(ctx context.Context, cfg *configs.CozeLoopExporterConfig) (sdkmetric.Exporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
 		return nil, fmt.Errorf("CozeLoop exporter endpoint is required")

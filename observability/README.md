@@ -8,7 +8,6 @@ This package provides comprehensive observability features for the VeADK Go SDK,
 - **Multi-Platform Support**: Simultaneously export traces to CozeLoop, APMPlus, Volcano TLS, or local files/stdout
 - **Automatic Attribute Enrichment**: Automatically captures and propagates `SessionID`, `UserID`, `AppName`, `InvocationID` from context, config, or environment
 - **Span Hierarchy Support**: Properly tracks invocation → agent → LLM/tool execution hierarchies
-- **Launcher Integration**: Specialized `ObservedLauncher` ensures complete trace capture from root invocation span
 - **Metrics Support**: Automated recording of token usage, operation latencies, and first token latency
 
 ## Span Attribute Specification
@@ -109,22 +108,33 @@ func main() {
 }
 ```
 
-### Launcher Integration
+### Observability Plugin
 
-To ensure the root span (e.g., `invocation`) is captured correctly, wrap your launcher:
+To enable automatic trace capture (including the root `invocation` span), register the observability plugin:
 
 ```go
 import (
     "github.com/volcengine/veadk-go/observability"
     "google.golang.org/adk/cmd/launcher/full"
+    "google.golang.org/adk/runner"
+    "google.golang.org/adk/plugin"
 )
 
 func main() {
-    // ... setup config ...
+    ctx := context.Background()
+    observability.Init(ctx)
+    defer observability.Shutdown(ctx)
+
+    // ... setup agent ...
+
+    config := &launcher.Config{
+        AgentLoader:    agent.NewSingleLoader(a),
+        PluginConfig: runner.PluginConfig{
+            Plugins: []*plugin.Plugin{observability.NewPlugin()},
+        },
+    }
     
-    // Wrap the standard launcher
-    l := observability.NewObservedLauncher(full.NewLauncher())
-    
+    l := full.NewLauncher()
     if err := l.Execute(ctx, config, os.Args[1:]); err != nil {
         log.Fatal(err)
     }

@@ -22,10 +22,10 @@ import (
 
 const (
 	// Global
+	EnvOtelServiceName                   = "OTEL_SERVICE_NAME"
 	EnvObservabilityEnableLocalProvider  = "OBSERVABILITY_OPENTELEMETRY_ENABLE_LOCAL_PROVIDER"
 	EnvObservabilityEnableGlobalProvider = "OBSERVABILITY_OPENTELEMETRY_ENABLE_GLOBAL_PROVIDER"
-	EnvObservabilityEnableMeterProvider  = "OBSERVABILITY_OPENTELEMETRY_ENABLE_METER_PROVIDER"
-	EnvOtelServiceName                   = "OTEL_SERVICE_NAME"
+	EnvObservabilityEnableMetrics        = "OBSERVABILITY_OPENTELEMETRY_ENABLE_METRICS"
 
 	// APMPlus
 	EnvObservabilityOpenTelemetryApmPlusProtocol    = "OBSERVABILITY_OPENTELEMETRY_APMPLUS_PROTOCOL"
@@ -61,13 +61,13 @@ type ObservabilityConfig struct {
 type OpenTelemetryConfig struct {
 	EnableLocalProvider  bool  `yaml:"enable_local_tracer"`
 	EnableGlobalProvider bool  `yaml:"enable_global_tracer"`
-	EnableMeterProvider  *bool `yaml:"enable_meter_provider"`
+	EnableMetrics        *bool `yaml:"enable_metrics"`
 
-	File     *FileConfig        `yaml:"file"`
-	Stdout   *StdoutConfig      `yaml:"stdout"`
-	ApmPlus  *ApmPlusConfig     `yaml:"apmplus"`
-	CozeLoop *CozeLoopConfig    `yaml:"cozeloop"`
-	TLS      *TLSExporterConfig `yaml:"tls"`
+	File     *FileConfig             `yaml:"file"`
+	Stdout   *StdoutConfig           `yaml:"stdout"`
+	ApmPlus  *ApmPlusConfig          `yaml:"apmplus"`
+	CozeLoop *CozeLoopExporterConfig `yaml:"cozeloop"`
+	TLS      *TLSExporterConfig      `yaml:"tls"`
 }
 
 type ApmPlusConfig struct {
@@ -77,7 +77,7 @@ type ApmPlusConfig struct {
 	ServiceName string `yaml:"service_name"`
 }
 
-type CozeLoopConfig struct {
+type CozeLoopExporterConfig struct {
 	Endpoint    string `yaml:"endpoint"`
 	APIKey      string `yaml:"api_key"`
 	ServiceName string `yaml:"service_name"`
@@ -114,9 +114,9 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 
 		ot.ApmPlus.Endpoint = v
 
-		if ot.EnableMeterProvider == nil {
-			ot.EnableMeterProvider = new(bool)
-			*ot.EnableMeterProvider = true
+		if ot.EnableMetrics == nil {
+			ot.EnableMetrics = new(bool)
+			*ot.EnableMetrics = true
 		}
 	}
 
@@ -150,20 +150,20 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 	// CozeLoop
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryCozeLoopEndpoint); v != "" {
 		if ot.CozeLoop == nil {
-			ot.CozeLoop = &CozeLoopConfig{}
+			ot.CozeLoop = &CozeLoopExporterConfig{}
 		}
 		ot.CozeLoop.Endpoint = v
 	}
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryCozeLoopAPIKey); v != "" {
 		if ot.CozeLoop == nil {
-			ot.CozeLoop = &CozeLoopConfig{}
+			ot.CozeLoop = &CozeLoopExporterConfig{}
 		}
 		ot.CozeLoop.APIKey = v
 	}
 
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryCozeLoopServiceName); v != "" {
 		if ot.CozeLoop == nil {
-			ot.CozeLoop = &CozeLoopConfig{}
+			ot.CozeLoop = &CozeLoopExporterConfig{}
 		}
 		ot.CozeLoop.ServiceName = v
 		if os.Getenv(EnvOtelServiceName) == "" {
@@ -202,6 +202,7 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 		}
 		ot.TLS.TopicID = v
 	}
+
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryTLSAccessKey); v != "" {
 		if ot.TLS == nil {
 			ot.TLS = &TLSExporterConfig{}
@@ -241,10 +242,91 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 	}
 
 	// Meter Provider
-	if v := utils.GetEnvWithDefault(EnvObservabilityEnableMeterProvider); v != "" {
-		if ot.EnableMeterProvider == nil {
-			ot.EnableMeterProvider = new(bool)
+	if v := utils.GetEnvWithDefault(EnvObservabilityEnableMetrics); v != "" {
+		if ot.EnableMetrics == nil {
+			ot.EnableMetrics = new(bool)
 		}
-		*ot.EnableMeterProvider = v == "true"
+		*ot.EnableMetrics = v == "true"
+	}
+}
+
+func (c *ObservabilityConfig) Clone() *ObservabilityConfig {
+	if c == nil {
+		return nil
+	}
+	return &ObservabilityConfig{
+		OpenTelemetry: c.OpenTelemetry.Clone(),
+	}
+}
+
+func (c *OpenTelemetryConfig) Clone() *OpenTelemetryConfig {
+	if c == nil {
+		return nil
+	}
+
+	return &OpenTelemetryConfig{
+		EnableGlobalProvider: c.EnableGlobalProvider,
+		EnableLocalProvider:  c.EnableLocalProvider,
+		EnableMetrics:        c.EnableMetrics,
+		ApmPlus:              c.ApmPlus.Clone(),
+		CozeLoop:             c.CozeLoop.Clone(),
+		TLS:                  c.TLS.Clone(),
+		File:                 c.File.Clone(),
+		Stdout:               c.Stdout.Clone(),
+	}
+}
+
+func (c *ApmPlusConfig) Clone() *ApmPlusConfig {
+	if c == nil {
+		return nil
+	}
+	return &ApmPlusConfig{
+		Endpoint:    c.Endpoint,
+		Protocol:    c.Protocol,
+		APIKey:      c.APIKey,
+		ServiceName: c.ServiceName,
+	}
+}
+
+func (c *CozeLoopExporterConfig) Clone() *CozeLoopExporterConfig {
+	if c == nil {
+		return nil
+	}
+	return &CozeLoopExporterConfig{
+		Endpoint:    c.Endpoint,
+		ServiceName: c.ServiceName,
+		APIKey:      c.APIKey,
+	}
+}
+
+func (c *TLSExporterConfig) Clone() *TLSExporterConfig {
+	if c == nil {
+		return nil
+	}
+	return &TLSExporterConfig{
+		Endpoint:    c.Endpoint,
+		ServiceName: c.ServiceName,
+		Region:      c.Region,
+		TopicID:     c.TopicID,
+		AccessKey:   c.AccessKey,
+		SecretKey:   c.SecretKey,
+	}
+}
+
+func (c *FileConfig) Clone() *FileConfig {
+	if c == nil {
+		return nil
+	}
+	return &FileConfig{
+		Path: c.Path,
+	}
+}
+
+func (c *StdoutConfig) Clone() *StdoutConfig {
+	if c == nil {
+		return nil
+	}
+	return &StdoutConfig{
+		Enable: c.Enable,
 	}
 }

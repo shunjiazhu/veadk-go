@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	"go.opentelemetry.io/otel/sdk/trace"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -46,12 +47,23 @@ type ADKTranslatedExporter struct {
 }
 
 func (e *ADKTranslatedExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
-	translated := make([]trace.ReadOnlySpan, len(spans))
-	for i, s := range spans {
-		translated[i] = &translatedSpan{ReadOnlySpan: s}
+	translated := make([]trace.ReadOnlySpan, 0, len(spans))
+	for _, s := range spans {
+		// Suppress duplicate ADK internal spans that we already cover with manual long-running spans.
+		// Standard ADK scope name is "gcp.vertex.agent".
+		if s.InstrumentationScope().Name == "gcp.vertex.agent" {
+			name := s.Name()
+			if name == "call_llm" {
+				continue
+			}
+		}
+
+		translated = append(translated, &translatedSpan{ReadOnlySpan: s})
+	}
+	if len(translated) == 0 {
+		return nil
 	}
 	return e.SpanExporter.ExportSpans(ctx, translated)
-	// return e.SpanExporter.ExportSpans(ctx, spans)
 }
 
 // translatedSpan wraps a ReadOnlySpan and intercepts calls to Attributes().
@@ -63,13 +75,34 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 	attrs := p.ReadOnlySpan.Attributes()
 	newAttrs := make([]attribute.KeyValue, 0, len(attrs))
 
+	hasStandardUsage := false
+	for _, kv := range attrs {
+		if kv.Key == "gen_ai.usage" {
+			hasStandardUsage = true
+			break
+		}
+	}
+
 	for _, kv := range attrs {
 		key := string(kv.Key)
 
 		// 1. Map ADK internal attributes if not already present in standard form
 		if strings.HasPrefix(key, "gcp.vertex.agent.") {
-			if targetKey, ok := ADKAttributeKeyMap[key]; ok {
-				newAttrs = append(newAttrs, attribute.KeyValue{Key: attribute.Key(targetKey), Value: kv.Value})
+			targetKey, ok := ADKAttributeKeyMap[key]
+			if ok {
+				// Avoid duplicates if Processor already mapped it
+				alreadyMapped := false
+				if !hasStandardUsage || targetKey != "gen_ai.usage" {
+					for _, na := range newAttrs {
+						if string(na.Key) == targetKey {
+							alreadyMapped = true
+							break
+						}
+					}
+				}
+				if !alreadyMapped {
+					newAttrs = append(newAttrs, attribute.KeyValue{Key: attribute.Key(targetKey), Value: kv.Value})
+				}
 			}
 			continue
 		}
@@ -85,11 +118,52 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 	return newAttrs
 }
 
+func (p *translatedSpan) Parent() oteltrace.SpanContext {
+	parent := p.ReadOnlySpan.Parent()
+	sc := p.ReadOnlySpan.SpanContext()
+	name := p.ReadOnlySpan.Name()
+	traceID := sc.TraceID()
+
+	// 1. Re-parent tool spans to the last 'call_llm' span
+	if name == "execute_tool" || strings.HasPrefix(name, "execute_tool ") {
+		if llmSC, ok := GetLLMSpanContext(traceID); ok {
+			// Ensure we don't reparent the llm span to itself (not possible here but good for safety)
+			if llmSC.SpanID() != sc.SpanID() {
+				return llmSC
+			}
+		}
+	}
+
+	// 2. Re-parent ADK internal spans (gcp.vertex.agent) to the current 'invoke_agent' span
+	if p.ReadOnlySpan.InstrumentationScope().Name == "gcp.vertex.agent" {
+		if agentSC, ok := GetAgentSpanContext(traceID); ok {
+			// Ensure we don't reparent the agent span to itself
+			if agentSC.SpanID() != sc.SpanID() {
+				return agentSC
+			}
+		}
+	}
+
+	// 3. Re-parent 'invoke_agent' spans to 'invocation' if they are roots
+	if !parent.IsValid() && (name == "invoke_agent" || strings.HasPrefix(name, "invoke_agent:") || strings.HasPrefix(name, "invoke_agent ")) {
+		registryMutex.RLock()
+		invSC, ok := invocationSpanMap[traceID]
+		registryMutex.RUnlock()
+		if ok {
+			if invSC.SpanID() != sc.SpanID() {
+				return invSC
+			}
+		}
+	}
+
+	return parent
+}
+
 func (p *translatedSpan) InstrumentationScope() instrumentation.Scope {
 	scope := p.ReadOnlySpan.InstrumentationScope()
-	if scope.Name == "gcp.vertex.agent" || scope.Name == "veadk" {
+	// github.com/volcengine/veadk-go is the InstrumentationName defined in observability/constant.go
+	if scope.Name == "gcp.vertex.agent" || scope.Name == "veadk" || scope.Name == "github.com/volcengine/veadk-go" {
 		scope.Name = "openinference.instrumentation.veadk"
-		// Version detection is handled in the main package to avoid repetition
 	}
 	return scope
 }

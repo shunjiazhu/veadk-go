@@ -201,6 +201,9 @@ func TestModel_Generate(t *testing.T) {
 					CandidatesTokenCount: 5,
 					TotalTokenCount:      15,
 				},
+				CustomMetadata: map[string]any{
+					"response_model": "test-model",
+				},
 				FinishReason: genai.FinishReasonStop,
 			},
 		},
@@ -223,6 +226,9 @@ func TestModel_Generate(t *testing.T) {
 					PromptTokenCount:     10,
 					CandidatesTokenCount: 5,
 					TotalTokenCount:      15,
+				},
+				CustomMetadata: map[string]any{
+					"response_model": "test-model",
 				},
 				FinishReason: genai.FinishReasonStop,
 			},
@@ -1268,7 +1274,7 @@ func TestBuildFinalResponse_EmptyToolCallFiltering(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp := m.buildFinalResponse("", tt.toolCalls, nil, "stop")
+			resp := m.buildFinalResponse("", "", tt.toolCalls, nil, "stop")
 
 			var functionCalls []*genai.FunctionCall
 			for _, part := range resp.Content.Parts {

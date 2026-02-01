@@ -48,12 +48,11 @@ func getVersion() string {
 // Span names
 const (
 	SpanInvocation  = "invocation"
-	SpanInvokeAgent = "invoke_agent"
+	SpanInvokeAgent = "invoke_agent" // Will be suffixed with name in code
 	SpanCallLLM     = "call_llm"
-	SpanExecuteTool = "execute_tool"
+	SpanExecuteTool = "execute_tool" // Will be suffixed with name in code
 )
 
-// Metric names
 // Metric names
 const (
 	MetricNameChatCount                   = "gen_ai.chat.count"

@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	"go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 func TestTranslatedSpan_Attributes(t *testing.T) {
@@ -95,4 +96,37 @@ func TestADKTranslatedExporter_ExportSpans(t *testing.T) {
 
 	spans := exporter.GetSpans()
 	assert.Len(t, spans, 1)
+}
+
+func TestTranslatedSpan_Parent(t *testing.T) {
+	// 1. Setup a parent span context (the 'invoke_agent' span)
+	traceID, _ := oteltrace.TraceIDFromHex("0102030405060708090a0b0c0d0e0f10")
+	parentSpanID, _ := oteltrace.SpanIDFromHex("0102030405060708")
+	parentSC := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+		TraceID: traceID,
+		SpanID:  parentSpanID,
+	})
+
+	// 2. Register it in our registry
+	RegisterAgentSpanContext(traceID, parentSC)
+	defer UnregisterAgentSpanContext(traceID)
+
+	// 3. Setup a child span that belongs to ADK but has no parent (or a different one)
+	childSpanID, _ := oteltrace.SpanIDFromHex("0807060504030201")
+	mockChildSpan := &tracetest.SpanStub{
+		SpanContext: oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+			TraceID: traceID,
+			SpanID:  childSpanID,
+		}),
+		InstrumentationScope: instrumentation.Scope{
+			Name: "gcp.vertex.agent",
+		},
+	}
+
+	ts := &translatedSpan{ReadOnlySpan: mockChildSpan.Snapshot()}
+
+	// 4. Verify that Parent() returns our registered agent span
+	parent := ts.Parent()
+	assert.Equal(t, parentSC.SpanID(), parent.SpanID())
+	assert.Equal(t, parentSC.TraceID(), parent.TraceID())
 }
