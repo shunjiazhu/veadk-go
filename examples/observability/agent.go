@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	veagent "github.com/volcengine/veadk-go/agent/llmagent"
 	"github.com/volcengine/veadk-go/common"
@@ -22,11 +21,9 @@ import (
 
 func main() {
 	ctx := context.Background()
-	observability.Init(ctx)
-	defer func() {
-		time.Sleep(1 * time.Second)
-		observability.Shutdown(ctx)
-	}()
+
+	// Important: Always call Shutdown to flush spans and metrics
+	defer observability.Shutdown(ctx)
 
 	cfg := &veagent.Config{
 		ModelName:    common.DEFAULT_MODEL_AGENT_NAME,

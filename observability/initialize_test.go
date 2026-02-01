@@ -66,7 +66,7 @@ func TestSetGlobalTracerProvider(t *testing.T) {
 
 	exporter := tracetest.NewInMemoryExporter()
 	// Just verifies no panic and provider is updated
-	SetGlobalTracerProvider(exporter, true)
+	setGlobalTracerProvider(exporter)
 
 	// Ensure we can start a span
 	ctx := context.Background()
@@ -85,7 +85,7 @@ func TestSetGlobalTracerProvider(t *testing.T) {
 
 func TestInitializeWithConfig(t *testing.T) {
 	// Nil config should be fine
-	err := InitializeWithConfig(context.Background(), nil)
+	err := initWithConfig(context.Background(), nil)
 	assert.NoError(t, err)
 
 	// Config with disabled global provider but valid exporter
@@ -93,7 +93,7 @@ func TestInitializeWithConfig(t *testing.T) {
 		EnableGlobalProvider: false,
 		Stdout:               &configs.StdoutConfig{Enable: true},
 	}
-	err = InitializeWithConfig(context.Background(), cfg)
+	err = initWithConfig(context.Background(), cfg)
 	assert.NoError(t, err)
 
 	// Config with global provider enabled and stdout
@@ -101,7 +101,7 @@ func TestInitializeWithConfig(t *testing.T) {
 		EnableGlobalProvider: true,
 		Stdout:               &configs.StdoutConfig{Enable: true},
 	}
-	err = InitializeWithConfig(context.Background(), cfgGlobal)
+	err = initWithConfig(context.Background(), cfgGlobal)
 	assert.NoError(t, err)
 
 }

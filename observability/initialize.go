@@ -19,6 +19,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/volcengine/veadk-go/configs"
@@ -30,148 +31,42 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// AddSpanProcessor is a wrapper of google adk's RegisterSpanProcessor.
-func AddSpanProcessor(processor sdktrace.SpanProcessor) {
-	telemetry.RegisterSpanProcessor(processor)
-}
-
-// AddSpanExporter registers an exporter to Google ADK's local telemetry.
-func AddSpanExporter(exp sdktrace.SpanExporter) {
-	// Always wrap with ADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
-	translatedExp := &exporter.ADKTranslatedExporter{SpanExporter: exp}
-	AddSpanProcessor(exporter.NewADKSpanProcessor())
-
-	// Use BatchSpanProcessor for better performance and batching.
-	// Data durability is ensured via Shutdown/Flush on exit.
-	AddSpanProcessor(sdktrace.NewBatchSpanProcessor(translatedExp))
-}
+var (
+	initConfigOnce sync.Once
+)
 
 // Init initializes the observability system using the global configuration.
 // It automatically maps environment variables and YAML values.
-func Init(ctx context.Context) error {
-	HandleSignals(ctx)
-	globalConfig := configs.GetGlobalConfig()
+func Init(ctx context.Context, cfg *configs.ObservabilityConfig) error {
+	var err error
+	var initialized bool
+	initConfigOnce.Do(func() {
+		handleSignals(ctx)
 
-	if globalConfig == nil || globalConfig.Observability == nil || globalConfig.Observability.OpenTelemetry == nil {
-		log.Info("No observability config found, observability data will not be exported")
-		return InitializeWithConfig(ctx, nil)
-	}
-
-	return InitializeWithConfig(ctx, globalConfig.Observability.OpenTelemetry)
-}
-
-// SetGlobalTracerProvider configures the global OpenTelemetry TracerProvider.
-func SetGlobalTracerProvider(exp sdktrace.SpanExporter, enableMetrics bool, spanProcessors ...sdktrace.SpanProcessor) {
-	// Always wrap with ADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
-	translatedExp := &exporter.ADKTranslatedExporter{SpanExporter: exp}
-
-	// Default processors
-	allProcessors := append([]sdktrace.SpanProcessor{exporter.NewADKSpanProcessor()}, spanProcessors...)
-
-	// Use BatchSpanProcessor for all exporters to ensure performance and batching.
-	finalProcessor := sdktrace.NewBatchSpanProcessor(translatedExp)
-
-	// 1. Try to register with existing TracerProvider if it's an SDK TracerProvider
-	globalTP := otel.GetTracerProvider()
-	if sdkTP, ok := globalTP.(*sdktrace.TracerProvider); ok {
-		log.Info("Registering ADK Processors to existing global TracerProvider")
-		for _, sp := range allProcessors {
-			sdkTP.RegisterSpanProcessor(sp)
+		// In veadk-go, config loading might depend on loggers which might depend on global tracer
+		// or vice versa. We ensure InitConfig is called, and then initialize based on that.
+		var otelCfg *configs.OpenTelemetryConfig
+		if cfg != nil {
+			otelCfg = cfg.OpenTelemetry
 		}
-		sdkTP.RegisterSpanProcessor(finalProcessor)
-		return
-	}
 
-	// 2. Fallback: Create a new global TracerProvider
-	log.Info("Creating a new global TracerProvider")
-	var opts []sdktrace.TracerProviderOption
-	for _, sp := range allProcessors {
-		opts = append(opts, sdktrace.WithSpanProcessor(sp))
-	}
-
-	tp := sdktrace.NewTracerProvider(
-		append(opts, sdktrace.WithSpanProcessor(finalProcessor))...,
-	)
-
-	otel.SetTracerProvider(tp)
-}
-
-func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-
-	if cfg == nil {
-		return nil
-	}
-
-	exp, err := exporter.NewMultiExporter(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	if exp != nil {
-		AddSpanExporter(exp)
-	}
-	return nil
-}
-
-func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	log.Info("Registering ADK Global TracerProvider")
-
-	globalExp, err := exporter.NewMultiExporter(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	if globalExp != nil {
-		enableMetrics := cfg != nil && (cfg.EnableMetrics == nil || *cfg.EnableMetrics)
-		SetGlobalTracerProvider(globalExp, enableMetrics)
-	}
-	return nil
-}
-
-func initializeTraceProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	var errs []error
-	if cfg != nil && cfg.EnableLocalProvider {
-		err := setupLocalTracer(ctx, cfg)
-		if err != nil {
-			errs = append(errs, err)
+		if otelCfg == nil {
+			log.Info("No observability config found, observability data will not be exported")
 		}
-	}
 
-	if cfg != nil && cfg.EnableGlobalProvider {
-		err := setupGlobalTracer(ctx, cfg)
-		if err != nil {
-			errs = append(errs, err)
-		}
+		err = initWithConfig(ctx, otelCfg)
+		initialized = true
+	})
+
+	if initialized {
+		log.Info("Initializing TraceProvider and MetricsProvider based on observability config")
 	}
-	return errors.Join(errs...)
+	return err
 }
 
-func initializeMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	var errs []error
-	if cfg == nil || cfg.EnableMetrics == nil || !*cfg.EnableMetrics {
-		log.Info("Meter provider is not enabled")
-		return nil
-	}
-
-	if cfg != nil && cfg.EnableLocalProvider {
-		readers, err := exporter.NewMetricReader(ctx, cfg)
-		if err != nil {
-			errs = append(errs, err)
-		}
-		RegisterLocalMetrics(readers)
-	}
-
-	if cfg.EnableGlobalProvider {
-		globalReaders, err := exporter.NewMetricReader(ctx, cfg)
-		if err != nil {
-			errs = append(errs, err)
-		}
-		RegisterGlobalMetrics(globalReaders)
-	}
-	return errors.Join(errs...)
-}
-
-// InitializeWithConfig automatically initializes the observability system based on the provided configuration.
+// initWithConfig automatically initializes the observability system based on the provided configuration.
 // It creates the appropriate exporter and calls RegisterExporter.
-func InitializeWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+func initWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
 	var errs []error
 	err := initializeTraceProvider(ctx, cfg)
 	if err != nil {
@@ -228,8 +123,133 @@ func Shutdown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// HandleSignals registers a signal handler to ensure observability data is flushed on exit.
-func HandleSignals(ctx context.Context) {
+func newVeadkExporter(exp sdktrace.SpanExporter) sdktrace.SpanExporter {
+	return &exporter.ADKTranslatedExporter{SpanExporter: exp}
+}
+
+// AddSpanExporter registers an exporter to Google ADK's local telemetry.
+func AddSpanExporter(exp sdktrace.SpanExporter) {
+	telemetry.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(newVeadkExporter(exp)))
+}
+
+// AddGlobalSpanExporter registers an exporter toglobal TracerProvider.
+func AddGlobalSpanExporter(exp sdktrace.SpanExporter) {
+	globalTP := otel.GetTracerProvider()
+	if sdkTP, ok := globalTP.(*sdktrace.TracerProvider); ok {
+		sdkTP.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(newVeadkExporter(exp)))
+	}
+}
+
+// setGlobalTracerProvider configures the global OpenTelemetry TracerProvider.
+func setGlobalTracerProvider(exp sdktrace.SpanExporter, spanProcessors ...sdktrace.SpanProcessor) {
+	// Always wrap with ADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
+	translatedExp := newVeadkExporter(exp)
+
+	// Default processors
+	allProcessors := append([]sdktrace.SpanProcessor{}, spanProcessors...)
+
+	// Use BatchSpanProcessor for all exporters to ensure performance and batching.
+	finalProcessor := sdktrace.NewBatchSpanProcessor(translatedExp)
+
+	// 1. Try to register with existing TracerProvider if it's an SDK TracerProvider
+	globalTP := otel.GetTracerProvider()
+	if sdkTP, ok := globalTP.(*sdktrace.TracerProvider); ok {
+		log.Info("Registering ADK Processors to existing global TracerProvider")
+		for _, sp := range allProcessors {
+			sdkTP.RegisterSpanProcessor(sp)
+		}
+		sdkTP.RegisterSpanProcessor(finalProcessor)
+		return
+	}
+
+	// 2. Fallback: Create a new global TracerProvider
+	log.Info("Creating a new global TracerProvider")
+	var opts []sdktrace.TracerProviderOption
+	for _, sp := range allProcessors {
+		opts = append(opts, sdktrace.WithSpanProcessor(sp))
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		append(opts, sdktrace.WithSpanProcessor(finalProcessor))...,
+	)
+
+	otel.SetTracerProvider(tp)
+}
+
+func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+	if cfg == nil {
+		return nil
+	}
+
+	exp, err := exporter.NewMultiExporter(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
+	telemetry.RegisterSpanProcessor(exporter.NewVeADKSpanProcessor())
+	AddSpanExporter(exp)
+	return nil
+}
+
+func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+	log.Info("Registering ADK Global TracerProvider")
+
+	globalExp, err := exporter.NewMultiExporter(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
+	if globalExp != nil {
+		setGlobalTracerProvider(globalExp, exporter.NewVeADKSpanProcessor())
+	}
+	return nil
+}
+
+func initializeTraceProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+	var errs []error
+	if cfg != nil && cfg.EnableLocalProvider {
+		err := setupLocalTracer(ctx, cfg)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if cfg != nil && cfg.EnableGlobalProvider {
+		err := setupGlobalTracer(ctx, cfg)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func initializeMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+	var errs []error
+	if cfg == nil || cfg.EnableMetrics == nil || !*cfg.EnableMetrics {
+		log.Info("Meter provider is not enabled")
+		return nil
+	}
+
+	if cfg.EnableLocalProvider {
+		readers, err := exporter.NewMetricReader(ctx, cfg)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		RegisterLocalMetrics(readers)
+	}
+
+	if cfg.EnableGlobalProvider {
+		globalReaders, err := exporter.NewMetricReader(ctx, cfg)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		RegisterGlobalMetrics(globalReaders)
+	}
+	return errors.Join(errs...)
+}
+
+// handleSignals registers a signal handler to ensure observability data is flushed on exit.
+func handleSignals(ctx context.Context) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 

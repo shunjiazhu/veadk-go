@@ -23,8 +23,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// SetCommonAttributes enriches the span with common attributes from context, config, or env.
-func SetCommonAttributes(ctx context.Context, span trace.Span) {
+// setCommonAttributes enriches the span with common attributes from context, config, or env.
+func setCommonAttributes(ctx context.Context, span trace.Span) {
 	// 1. Fixed attributes
 	span.SetAttributes(attribute.String(AttrCozeloopReportSource, DefaultCozeLoopReportSource))
 
@@ -53,16 +53,16 @@ func setDynamicAttribute(span trace.Span, key string, val string, fallback strin
 	}
 }
 
-// SetLLMAttributes sets standard GenAI attributes for LLM spans.
-func SetLLMAttributes(span trace.Span) {
+// setLLMAttributes sets standard GenAI attributes for LLM spans.
+func setLLMAttributes(span trace.Span) {
 	span.SetAttributes(
 		attribute.String(AttrGenAISpanKind, SpanKindLLM),
 		attribute.String(AttrGenAIOperationName, "chat"),
 	)
 }
 
-// SetToolAttributes sets standard GenAI attributes for Tool spans.
-func SetToolAttributes(span trace.Span, name string) {
+// setToolAttributes sets standard GenAI attributes for Tool spans.
+func setToolAttributes(span trace.Span, name string) {
 	span.SetAttributes(
 		attribute.String(AttrGenAISpanKind, SpanKindTool),
 		attribute.String(AttrGenAIOperationName, "execute_tool"),
@@ -70,8 +70,8 @@ func SetToolAttributes(span trace.Span, name string) {
 	)
 }
 
-// SetAgentAttributes sets standard GenAI attributes for Agent spans.
-func SetAgentAttributes(span trace.Span, name string) {
+// setAgentAttributes sets standard GenAI attributes for Agent spans.
+func setAgentAttributes(span trace.Span, name string) {
 	span.SetAttributes(
 		attribute.String(AttrGenAIAgentName, name),
 		attribute.String(AttrAgentName, name),    // Alias: agent_name
@@ -79,64 +79,36 @@ func SetAgentAttributes(span trace.Span, name string) {
 	)
 }
 
-// SetWorkflowAttributes sets standard GenAI attributes for Workflow/Root spans.
-func SetWorkflowAttributes(span trace.Span) {
+// setWorkflowAttributes sets standard GenAI attributes for Workflow/Root spans.
+func setWorkflowAttributes(span trace.Span) {
 	span.SetAttributes(
 		attribute.String(AttrGenAISpanKind, SpanKindWorkflow),
 		attribute.String(AttrGenAIOperationName, "chain"),
 	)
 }
 
-func WithSessionId(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, ContextKeySessionId, id)
+func GetUserId(ctx context.Context) string {
+	return getContextString(ctx, ContextKeyUserId, EnvUserId)
 }
 
 func GetSessionId(ctx context.Context) string {
 	return getContextString(ctx, ContextKeySessionId, EnvSessionId)
 }
 
-func WithUserId(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, ContextKeyUserId, id)
-}
-
-func GetUserId(ctx context.Context) string {
-	return getContextString(ctx, ContextKeyUserId, EnvUserId)
-}
-
-func WithAppName(ctx context.Context, name string) context.Context {
-	return context.WithValue(ctx, ContextKeyAppName, name)
-}
-
 func GetAppName(ctx context.Context) string {
 	return getContextString(ctx, ContextKeyAppName, EnvAppName)
-}
-
-func WithAgentName(ctx context.Context, name string) context.Context {
-	return context.WithValue(ctx, ContextKeyAgentName, name)
 }
 
 func GetAgentName(ctx context.Context) string {
 	return getContextString(ctx, ContextKeyAgentName, EnvAgentName)
 }
 
-func WithCallType(ctx context.Context, t string) context.Context {
-	return context.WithValue(ctx, ContextKeyCallType, t)
-}
-
 func GetCallType(ctx context.Context) string {
 	return getContextString(ctx, ContextKeyCallType, EnvCallType)
 }
 
-func WithModelProvider(ctx context.Context, p string) context.Context {
-	return context.WithValue(ctx, ContextKeyModelProvider, p)
-}
-
 func GetModelProvider(ctx context.Context) string {
 	return getContextString(ctx, ContextKeyModelProvider, EnvModelProvider)
-}
-
-func WithInvocationId(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, ContextKeyInvocationId, id)
 }
 
 func GetInvocationId(ctx context.Context) string {

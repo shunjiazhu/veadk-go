@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 
+	"sync"
+
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
@@ -42,14 +44,17 @@ type EnvConfigMaptoStruct interface {
 	MapEnvToConfig() // 用于映射环境变量到结构体字段
 }
 
-var globalConfig *VeADKConfig
+var (
+	globalConfig *VeADKConfig
+	configOnce   sync.Once
+)
 
 func GetGlobalConfig() *VeADKConfig {
-	if globalConfig == nil {
+	configOnce.Do(func() {
 		if err := SetupVeADKConfig(); err != nil {
 			panic(err)
 		}
-	}
+	})
 	return globalConfig
 }
 

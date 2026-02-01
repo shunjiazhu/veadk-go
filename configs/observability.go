@@ -249,3 +249,84 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 		*ot.EnableMetrics = v == "true"
 	}
 }
+
+func (c *ObservabilityConfig) Clone() *ObservabilityConfig {
+	if c == nil {
+		return nil
+	}
+	return &ObservabilityConfig{
+		OpenTelemetry: c.OpenTelemetry.Clone(),
+	}
+}
+
+func (c *OpenTelemetryConfig) Clone() *OpenTelemetryConfig {
+	if c == nil {
+		return nil
+	}
+
+	return &OpenTelemetryConfig{
+		EnableGlobalProvider: c.EnableGlobalProvider,
+		EnableLocalProvider:  c.EnableLocalProvider,
+		EnableMetrics:        c.EnableMetrics,
+		ApmPlus:              c.ApmPlus.Clone(),
+		CozeLoop:             c.CozeLoop.Clone(),
+		TLS:                  c.TLS.Clone(),
+		File:                 c.File.Clone(),
+		Stdout:               c.Stdout.Clone(),
+	}
+}
+
+func (c *ApmPlusConfig) Clone() *ApmPlusConfig {
+	if c == nil {
+		return nil
+	}
+	return &ApmPlusConfig{
+		Endpoint:    c.Endpoint,
+		Protocol:    c.Protocol,
+		APIKey:      c.APIKey,
+		ServiceName: c.ServiceName,
+	}
+}
+
+func (c *CozeLoopExporterConfig) Clone() *CozeLoopExporterConfig {
+	if c == nil {
+		return nil
+	}
+	return &CozeLoopExporterConfig{
+		Endpoint:    c.Endpoint,
+		ServiceName: c.ServiceName,
+		APIKey:      c.APIKey,
+	}
+}
+
+func (c *TLSExporterConfig) Clone() *TLSExporterConfig {
+	if c == nil {
+		return nil
+	}
+	return &TLSExporterConfig{
+		Endpoint:    c.Endpoint,
+		ServiceName: c.ServiceName,
+		Region:      c.Region,
+		TopicID:     c.TopicID,
+		AccessKey:   c.AccessKey,
+		SecretKey:   c.SecretKey,
+	}
+}
+
+func (c *FileConfig) Clone() *FileConfig {
+	if c == nil {
+		return nil
+	}
+	return &FileConfig{
+		Path: c.Path,
+	}
+}
+
+func (c *StdoutConfig) Clone() *StdoutConfig {
+	if c == nil {
+		return nil
+	}
+	return &StdoutConfig{
+		Enable: c.Enable,
+	}
+}

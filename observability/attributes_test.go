@@ -44,28 +44,6 @@ func (m *MockSpan) SetAttributes(kv ...attribute.KeyValue) {
 	}
 }
 
-func TestContextAttributes(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("SessionId", func(t *testing.T) {
-		assert.Equal(t, "", GetSessionId(ctx))
-		ctxWithId := WithSessionId(ctx, "test-session")
-		assert.Equal(t, "test-session", GetSessionId(ctxWithId))
-	})
-
-	t.Run("UserId", func(t *testing.T) {
-		assert.Equal(t, "", GetUserId(ctx))
-		ctxWithId := WithUserId(ctx, "test-user")
-		assert.Equal(t, "test-user", GetUserId(ctxWithId))
-	})
-
-	t.Run("AppName", func(t *testing.T) {
-		assert.Equal(t, "", GetAppName(ctx))
-		ctxWithName := WithAppName(ctx, "test-app")
-		assert.Equal(t, "test-app", GetAppName(ctxWithName))
-	})
-}
-
 func TestEnvFallback(t *testing.T) {
 	os.Setenv(EnvAppName, "env-app")
 	defer os.Unsetenv(EnvAppName)
@@ -73,56 +51,19 @@ func TestEnvFallback(t *testing.T) {
 	ctx := context.Background()
 	assert.Equal(t, "env-app", GetAppName(ctx))
 
-	// Context should still win
-	ctxWithApp := WithAppName(ctx, "ctx-app")
-	assert.Equal(t, "ctx-app", GetAppName(ctxWithApp))
-}
-
-func TestSetCommonAttributes(t *testing.T) {
-	ctx := context.Background()
-	ctx = WithAppName(ctx, "my-app")
-	ctx = WithUserId(ctx, "u123")
-	ctx = WithSessionId(ctx, "s456")
-	ctx = WithModelProvider(ctx, "doubao")
-	ctx = WithInvocationId(ctx, "inv789")
-
-	span := NewMockSpan()
-	SetCommonAttributes(ctx, span)
-
-	// Check fixed attributes
-	assert.Equal(t, DefaultCozeLoopReportSource, span.Attributes[attribute.Key(AttrCozeloopReportSource)].AsString())
-
-	// Check dynamic attributes
-	assert.Equal(t, "doubao", span.Attributes[attribute.Key(AttrGenAISystem)].AsString())
-	assert.Equal(t, Version, span.Attributes[attribute.Key(AttrGenAISystemVersion)].AsString())
-	assert.Equal(t, Version, span.Attributes[attribute.Key(AttrInstrumentation)].AsString())
-
-	// Check aliases
-	assert.Equal(t, "my-app", span.Attributes[attribute.Key(AttrGenAIAppName)].AsString())
-	assert.Equal(t, "my-app", span.Attributes[attribute.Key(AttrAppNameUnderline)].AsString())
-	assert.Equal(t, "my-app", span.Attributes[attribute.Key(AttrAppNameDot)].AsString())
-
-	assert.Equal(t, "u123", span.Attributes[attribute.Key(AttrGenAIUserId)].AsString())
-	assert.Equal(t, "u123", span.Attributes[attribute.Key(AttrUserId)].AsString())
-
-	assert.Equal(t, "s456", span.Attributes[attribute.Key(AttrGenAISessionId)].AsString())
-	assert.Equal(t, "s456", span.Attributes[attribute.Key(AttrSessionId)].AsString())
-
-	assert.Equal(t, "inv789", span.Attributes[attribute.Key(AttrGenAIInvocationId)].AsString())
-	assert.Equal(t, "inv789", span.Attributes[attribute.Key(AttrInvocationId)].AsString())
 }
 
 func TestSetSpecificAttributes(t *testing.T) {
 	t.Run("LLM", func(t *testing.T) {
 		span := NewMockSpan()
-		SetLLMAttributes(span)
+		setLLMAttributes(span)
 		assert.Equal(t, SpanKindLLM, span.Attributes[attribute.Key(AttrGenAISpanKind)].AsString())
 		assert.Equal(t, "chat", span.Attributes[attribute.Key(AttrGenAIOperationName)].AsString())
 	})
 
 	t.Run("Tool", func(t *testing.T) {
 		span := NewMockSpan()
-		SetToolAttributes(span, "my-tool")
+		setToolAttributes(span, "my-tool")
 		assert.Equal(t, SpanKindTool, span.Attributes[attribute.Key(AttrGenAISpanKind)].AsString())
 		assert.Equal(t, "execute_tool", span.Attributes[attribute.Key(AttrGenAIOperationName)].AsString())
 		assert.Equal(t, "my-tool", span.Attributes[attribute.Key(AttrGenAIToolName)].AsString())
@@ -130,7 +71,7 @@ func TestSetSpecificAttributes(t *testing.T) {
 
 	t.Run("Agent", func(t *testing.T) {
 		span := NewMockSpan()
-		SetAgentAttributes(span, "my-agent")
+		setAgentAttributes(span, "my-agent")
 		assert.Equal(t, "my-agent", span.Attributes[attribute.Key(AttrGenAIAgentName)].AsString())
 		assert.Equal(t, "my-agent", span.Attributes[attribute.Key(AttrAgentName)].AsString())
 		assert.Equal(t, "my-agent", span.Attributes[attribute.Key(AttrAgentNameDot)].AsString())

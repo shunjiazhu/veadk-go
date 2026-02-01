@@ -22,17 +22,17 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 
-// ADKSpanProcessor is a custom SpanProcessor that enriches spans with standard GenAI attributes
+// VeADKSpanProcessor is a custom SpanProcessor that enriches spans with standard GenAI attributes
 // and handles span lifecycle events for hierarchy management.
-type ADKSpanProcessor struct {
+type VeADKSpanProcessor struct {
 	trace.SpanProcessor
 }
 
-func NewADKSpanProcessor() *ADKSpanProcessor {
-	return &ADKSpanProcessor{}
+func NewVeADKSpanProcessor() *VeADKSpanProcessor {
+	return &VeADKSpanProcessor{}
 }
 
-func (p *ADKSpanProcessor) OnStart(ctx context.Context, s trace.ReadWriteSpan) {
+func (p *VeADKSpanProcessor) OnStart(ctx context.Context, s trace.ReadWriteSpan) {
 	name := s.Name()
 	sc := s.SpanContext()
 	traceID := sc.TraceID()
@@ -63,15 +63,13 @@ func (p *ADKSpanProcessor) OnStart(ctx context.Context, s trace.ReadWriteSpan) {
 	}
 }
 
-func (p *ADKSpanProcessor) OnEnd(s trace.ReadOnlySpan) {
-	// Optional: cleanup registry on trace end if needed
-	// However, we usually don't know if this is the last span of the trace here.
+func (p *VeADKSpanProcessor) OnEnd(s trace.ReadOnlySpan) {
 }
 
-func (p *ADKSpanProcessor) Shutdown(ctx context.Context) error {
+func (p *VeADKSpanProcessor) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (p *ADKSpanProcessor) ForceFlush(ctx context.Context) error {
+func (p *VeADKSpanProcessor) ForceFlush(ctx context.Context) error {
 	return nil
 }

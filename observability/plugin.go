@@ -22,8 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/volcengine/veadk-go/configs"
-	"github.com/volcengine/veadk-go/observability/exporter"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -34,72 +32,34 @@ import (
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
+
+	"github.com/volcengine/veadk-go/configs"
+	"github.com/volcengine/veadk-go/log"
+	"github.com/volcengine/veadk-go/observability/exporter"
 )
-
-const (
-	stateKeyMetadata        = "veadk.observability.metadata"
-	stateKeyStreamingOutput = "veadk.observability.streaming_output"
-	stateKeyStreamingSpan   = "veadk.observability.streaming_span"
-	stateKeyAgentSpan       = "veadk.observability.agent_span"
-	stateKeyAgentCtx        = "veadk.observability.agent_ctx"
-	stateKeyInvocationSpan  = "veadk.observability.invocation_span"
-	stateKeyInvocationCtx   = "veadk.observability.invocation_ctx"
-)
-
-// spanMetadata groups various observational data points in a single structure
-// to keep the ADK State clean.
-type spanMetadata struct {
-	StartTime           time.Time
-	FirstTokenTime      time.Time
-	PromptTokens        int64
-	CandidateTokens     int64
-	TotalTokens         int64
-	PrevPromptTokens    int64
-	PrevCandidateTokens int64
-	PrevTotalTokens     int64
-	ModelName           string
-}
-
-func (p *adkObservabilityPlugin) getSpanMetadata(state session.State) *spanMetadata {
-	val, _ := state.Get(stateKeyMetadata)
-	if meta, ok := val.(*spanMetadata); ok {
-		return meta
-	}
-	return &spanMetadata{}
-}
-
-func (p *adkObservabilityPlugin) storeSpanMetadata(state session.State, meta *spanMetadata) {
-	_ = state.Set(stateKeyMetadata, meta)
-}
-
-// Option defines a functional option for the ADKObservabilityPlugin.
-type Option func(*adkObservabilityPlugin)
-
-// WithEnableMetrics creates an Option to manually control metrics recording.
-func WithEnableMetrics(enable bool) Option {
-	return func(p *adkObservabilityPlugin) {
-		enableVal := enable
-		p.config.EnableMetrics = &enableVal
-	}
-}
-
-// PluginConfig defines the internal configuration for the ADKObservabilityPlugin.
-type PluginConfig struct {
-	// EnableMetrics allows manual control over whether metrics are recorded for this plugin.
-	// If nil, it will follow the global configuration (EnableMetrics).
-	EnableMetrics *bool
-}
 
 // NewPlugin creates a new observability plugin for ADK.
 // It returns a *plugin.Plugin that can be registered in launcher.Config or agent.Config.
 func NewPlugin(opts ...Option) *plugin.Plugin {
-	p := &adkObservabilityPlugin{
-		tracer: otel.Tracer(InstrumentationName),
+	// Ensure observability system is initialized.
+	// This will use default configuration or environment variables.
+	observabilityConfig := configs.GetGlobalConfig().Observability.Clone()
+	// Apply options
+	for _, opt := range opts {
+		opt(observabilityConfig)
 	}
 
-	for _, opt := range opts {
-		opt(p)
+	p := &adkObservabilityPlugin{
+		config: observabilityConfig,
 	}
+
+	err := Init(context.Background(), observabilityConfig)
+	if err != nil {
+		log.Error("Init observability failed", "error", err)
+		return nil
+	}
+
+	p.tracer = otel.Tracer(InstrumentationName)
 
 	pluginInstance, _ := plugin.New(plugin.Config{
 		Name:                "veadk-observability",
@@ -115,22 +75,33 @@ func NewPlugin(opts ...Option) *plugin.Plugin {
 	return pluginInstance
 }
 
+// Option defines a functional option for the ADKObservabilityPlugin.
+type Option func(config *configs.ObservabilityConfig)
+
+// WithEnableMetrics creates an Option to manually control metrics recording.
+func WithEnableMetrics(enable bool) Option {
+	return func(cfg *configs.ObservabilityConfig) {
+		enableVal := enable
+		cfg.OpenTelemetry.EnableMetrics = &enableVal
+	}
+}
+
 type adkObservabilityPlugin struct {
-	tracer trace.Tracer
-	config PluginConfig
+	config *configs.ObservabilityConfig
+
+	tracer trace.Tracer // global tracer
 }
 
 func (p *adkObservabilityPlugin) isMetricsEnabled() bool {
-	if p.config.EnableMetrics != nil {
-		return *p.config.EnableMetrics
+	if p.config == nil || p.config.OpenTelemetry == nil {
+		return false
 	}
-	// Fallback to global config
-	globalConfig := configs.GetGlobalConfig()
-	if globalConfig != nil && globalConfig.Observability != nil && globalConfig.Observability.OpenTelemetry != nil {
-		cfg := globalConfig.Observability.OpenTelemetry
-		return cfg.EnableMetrics == nil || *cfg.EnableMetrics
+
+	if p.config.OpenTelemetry.EnableMetrics != nil {
+		return *p.config.OpenTelemetry.EnableMetrics
 	}
-	return true // Default to true if no config found
+
+	return false
 }
 
 // BeforeRun is called before an agent run starts.
@@ -158,8 +129,8 @@ func (p *adkObservabilityPlugin) BeforeRun(ctx agent.InvocationContext) (*genai.
 	}
 
 	// 5. Set attributes
-	SetCommonAttributes(newCtx, span)
-	SetWorkflowAttributes(span)
+	setCommonAttributes(newCtx, span)
+	setWorkflowAttributes(span)
 
 	// Record start time for metrics
 	meta := &spanMetadata{
@@ -266,9 +237,9 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 		span.SetAttributes(attribute.String("adk.internal_span_id", adkSpan.SpanContext().SpanID().String()))
 	}
 
-	SetCommonAttributes(newCtx, span)
+	setCommonAttributes(newCtx, span)
 	// Set GenAI standard span attributes
-	SetLLMAttributes(span)
+	setLLMAttributes(span)
 
 	// Record request attributes
 	attrs := []attribute.KeyValue{
@@ -408,6 +379,7 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 
 			if p.isMetricsEnabled() {
 				// TODO: Alignment with Python - Python currently has these as TODOs
+				// latency := time.Since(meta.FirstTokenTime)
 				// RecordStreamingTimeToFirstToken(context.Context(ctx), latency, metricAttrs...)
 			}
 		}
@@ -511,6 +483,7 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 
 	// If this is the final chunk (or non-streaming response), record final metrics
 	if !resp.Partial {
+
 		// Record Operation Duration and Latency
 		if !meta.StartTime.IsZero() {
 			duration := time.Since(meta.StartTime).Seconds()
@@ -793,8 +766,8 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 	activeCtx := context.Context(ctx)
 
 	// Set GenAI standard span attributes
-	SetCommonAttributes(activeCtx, span)
-	SetToolAttributes(span, tool.Name())
+	setCommonAttributes(activeCtx, span)
+	setToolAttributes(span, tool.Name())
 
 	// Enrich standard attributes
 	argsJSON, _ := json.Marshal(args)
@@ -875,9 +848,9 @@ func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.
 	}
 
 	// 4. Set attributes
-	SetAgentAttributes(span, agentName)
-	SetCommonAttributes(newCtx, span)
-	SetWorkflowAttributes(span)
+	setCommonAttributes(newCtx, span)
+	setWorkflowAttributes(span)
+	setAgentAttributes(span, agentName)
 
 	return nil, nil
 }
@@ -897,4 +870,40 @@ func (p *adkObservabilityPlugin) AfterAgent(ctx agent.CallbackContext) (*genai.C
 		}
 	}
 	return nil, nil
+}
+
+func (p *adkObservabilityPlugin) getSpanMetadata(state session.State) *spanMetadata {
+	val, _ := state.Get(stateKeyMetadata)
+	if meta, ok := val.(*spanMetadata); ok {
+		return meta
+	}
+	return &spanMetadata{}
+}
+
+func (p *adkObservabilityPlugin) storeSpanMetadata(state session.State, meta *spanMetadata) {
+	_ = state.Set(stateKeyMetadata, meta)
+}
+
+const (
+	stateKeyMetadata        = "veadk.observability.metadata"
+	stateKeyStreamingOutput = "veadk.observability.streaming_output"
+	stateKeyStreamingSpan   = "veadk.observability.streaming_span"
+	stateKeyAgentSpan       = "veadk.observability.agent_span"
+	stateKeyAgentCtx        = "veadk.observability.agent_ctx"
+	stateKeyInvocationSpan  = "veadk.observability.invocation_span"
+	stateKeyInvocationCtx   = "veadk.observability.invocation_ctx"
+)
+
+// spanMetadata groups various observational data points in a single structure
+// to keep the ADK State clean.
+type spanMetadata struct {
+	StartTime           time.Time
+	FirstTokenTime      time.Time
+	PromptTokens        int64
+	CandidateTokens     int64
+	TotalTokens         int64
+	PrevPromptTokens    int64
+	PrevCandidateTokens int64
+	PrevTotalTokens     int64
+	ModelName           string
 }
