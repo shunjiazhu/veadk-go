@@ -63,11 +63,11 @@ type OpenTelemetryConfig struct {
 	EnableGlobalProvider bool  `yaml:"enable_global_tracer"`
 	EnableMetrics        *bool `yaml:"enable_metrics"`
 
-	File     *FileConfig        `yaml:"file"`
-	Stdout   *StdoutConfig      `yaml:"stdout"`
-	ApmPlus  *ApmPlusConfig     `yaml:"apmplus"`
-	CozeLoop *CozeLoopConfig    `yaml:"cozeloop"`
-	TLS      *TLSExporterConfig `yaml:"tls"`
+	File     *FileConfig             `yaml:"file"`
+	Stdout   *StdoutConfig           `yaml:"stdout"`
+	ApmPlus  *ApmPlusConfig          `yaml:"apmplus"`
+	CozeLoop *CozeLoopExporterConfig `yaml:"cozeloop"`
+	TLS      *TLSExporterConfig      `yaml:"tls"`
 }
 
 type ApmPlusConfig struct {
@@ -77,7 +77,7 @@ type ApmPlusConfig struct {
 	ServiceName string `yaml:"service_name"`
 }
 
-type CozeLoopConfig struct {
+type CozeLoopExporterConfig struct {
 	Endpoint    string `yaml:"endpoint"`
 	APIKey      string `yaml:"api_key"`
 	ServiceName string `yaml:"service_name"`
@@ -150,20 +150,20 @@ func (c *ObservabilityConfig) MapEnvToConfig() {
 	// CozeLoop
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryCozeLoopEndpoint); v != "" {
 		if ot.CozeLoop == nil {
-			ot.CozeLoop = &CozeLoopConfig{}
+			ot.CozeLoop = &CozeLoopExporterConfig{}
 		}
 		ot.CozeLoop.Endpoint = v
 	}
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryCozeLoopAPIKey); v != "" {
 		if ot.CozeLoop == nil {
-			ot.CozeLoop = &CozeLoopConfig{}
+			ot.CozeLoop = &CozeLoopExporterConfig{}
 		}
 		ot.CozeLoop.APIKey = v
 	}
 
 	if v := utils.GetEnvWithDefault(EnvObservabilityOpenTelemetryCozeLoopServiceName); v != "" {
 		if ot.CozeLoop == nil {
-			ot.CozeLoop = &CozeLoopConfig{}
+			ot.CozeLoop = &CozeLoopExporterConfig{}
 		}
 		ot.CozeLoop.ServiceName = v
 		if os.Getenv(EnvOtelServiceName) == "" {

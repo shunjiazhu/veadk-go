@@ -30,7 +30,7 @@ type VeADKConfig struct {
 	Model          *ModelConfig         `yaml:"model"`
 	Tool           *BuiltinToolConfigs  `yaml:"tools"`
 	PromptPilot    *PromptPilotConfig   `yaml:"prompt_pilot"`
-	CozeLoopConfig *CozeLoopAppConfig   `yaml:"coze_loop"`
+	CozeLoopConfig *CozeLoopConfig      `yaml:"coze_loop"`
 	TlsConfig      *TLSConfig           `yaml:"tls_config"`
 	Veidentity     *VeIdentityConfig    `yaml:"veidentity"`
 	Database       *DatabaseConfig      `yaml:"database"`
@@ -74,7 +74,7 @@ func SetupVeADKConfig() error {
 			LLMShield: &LLMShield{},
 		},
 		PromptPilot:    &PromptPilotConfig{},
-		CozeLoopConfig: &CozeLoopAppConfig{},
+		CozeLoopConfig: &CozeLoopConfig{},
 		TlsConfig:      &TLSConfig{},
 		Veidentity:     &VeIdentityConfig{},
 		LOGGING:        &Logging{},

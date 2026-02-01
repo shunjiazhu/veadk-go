@@ -42,7 +42,7 @@ func TestGetServiceName(t *testing.T) {
 
 	t.Run("CozeLoop", func(t *testing.T) {
 		cfg := &configs.OpenTelemetryConfig{
-			CozeLoop: &configs.CozeLoopConfig{ServiceName: "coze-service"},
+			CozeLoop: &configs.CozeLoopExporterConfig{ServiceName: "coze-service"},
 		}
 		assert.Equal(t, "coze-service", getServiceName(cfg))
 	})

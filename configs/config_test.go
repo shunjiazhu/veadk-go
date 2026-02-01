@@ -141,7 +141,7 @@ func TestObservabilityConfig_Priority(t *testing.T) {
 			ApmPlus: &ApmPlusConfig{
 				Endpoint: "apm-endpoint",
 			},
-			CozeLoop: &CozeLoopConfig{
+			CozeLoop: &CozeLoopExporterConfig{
 				Endpoint: "coze-endpoint",
 			},
 		},

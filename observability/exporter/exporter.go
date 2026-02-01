@@ -119,7 +119,7 @@ func NewStdoutExporter() (trace.SpanExporter, error) {
 }
 
 // NewCozeLoopExporter creates an OTLP HTTP exporter for CozeLoop.
-func NewCozeLoopExporter(ctx context.Context, cfg *configs.CozeLoopConfig) (trace.SpanExporter, error) {
+func NewCozeLoopExporter(ctx context.Context, cfg *configs.CozeLoopExporterConfig) (trace.SpanExporter, error) {
 	endpoint := cfg.Endpoint
 	return createTraceClient(ctx, endpoint, "", map[string]string{
 		"authorization":         "Bearer " + cfg.APIKey,
@@ -255,7 +255,7 @@ func NewMetricReader(ctx context.Context, cfg *configs.OpenTelemetryConfig) ([]s
 }
 
 // NewCozeLoopMetricExporter creates an OTLP Metric exporter for CozeLoop.
-func NewCozeLoopMetricExporter(ctx context.Context, cfg *configs.CozeLoopConfig) (sdkmetric.Exporter, error) {
+func NewCozeLoopMetricExporter(ctx context.Context, cfg *configs.CozeLoopExporterConfig) (sdkmetric.Exporter, error) {
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
 		return nil, fmt.Errorf("CozeLoop exporter endpoint is required")

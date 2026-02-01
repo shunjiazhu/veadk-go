@@ -27,7 +27,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.39.0
 	go.uber.org/zap v1.27.1
 	golang.org/x/oauth2 v0.32.0
-	google.golang.org/adk v0.3.1-0.20260128143420-39c421031f6c
+	google.golang.org/adk v0.4.1-0.20260130112425-78c856d8d703
 	google.golang.org/genai v1.40.0
 	gopkg.in/go-playground/validator.v8 v8.18.2
 	gopkg.in/yaml.v3 v3.0.1
