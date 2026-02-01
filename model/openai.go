@@ -562,6 +562,7 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 		scanner.Buffer(make([]byte, 64*1024), maxScannerBuffer)
 
 		var textBuffer strings.Builder
+		var reasoningBuffer strings.Builder
 		var toolCalls []toolCall
 		var finalUsage usage
 		var usageFound bool
@@ -599,6 +600,24 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 			delta := choice.Delta
 			if delta == nil {
 				continue
+			}
+
+			if delta.ReasoningContent != nil {
+				if text, ok := delta.ReasoningContent.(string); ok && text != "" {
+					reasoningBuffer.WriteString(text)
+					llmResp := &model.LLMResponse{
+						Content: &genai.Content{
+							Role: "model",
+							Parts: []*genai.Part{
+								{Text: text, Thought: true},
+							},
+						},
+						Partial: true,
+					}
+					if !yield(llmResp, nil) {
+						return
+					}
+				}
 			}
 
 			if delta.Content != nil {
@@ -657,7 +676,7 @@ func (m *openAIModel) generateStream(ctx context.Context, openaiReq *openAIReque
 			if finishedReason == "" {
 				finishedReason = "stop"
 			}
-			finalResp := m.buildFinalResponse(textBuffer.String(), toolCalls, u, finishedReason)
+			finalResp := m.buildFinalResponse(textBuffer.String(), reasoningBuffer.String(), toolCalls, u, finishedReason)
 			yield(finalResp, nil)
 		}
 	}
@@ -776,8 +795,15 @@ func (m *openAIModel) convertResponse(resp *response) (*model.LLMResponse, error
 	return llmResp, nil
 }
 
-func (m *openAIModel) buildFinalResponse(text string, toolCalls []toolCall, usage *usage, finishReason string) *model.LLMResponse {
+func (m *openAIModel) buildFinalResponse(text string, reasoningText string, toolCalls []toolCall, usage *usage, finishReason string) *model.LLMResponse {
 	var parts []*genai.Part
+
+	if reasoningText != "" {
+		parts = append(parts, &genai.Part{
+			Text:    reasoningText,
+			Thought: true,
+		})
+	}
 
 	if text != "" {
 		parts = append(parts, genai.NewPartFromText(text))

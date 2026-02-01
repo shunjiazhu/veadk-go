@@ -25,6 +25,7 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/artifact"
 	"google.golang.org/adk/memory"
+	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 )
 
@@ -34,6 +35,7 @@ type RunConfig struct {
 	MemoryService   memory.Service
 	AgentLoader     agent.Loader
 	A2AOptions      []a2asrv.RequestHandlerOption
+	PluginConfig    runner.PluginConfig
 }
 
 type ApiConfig struct {

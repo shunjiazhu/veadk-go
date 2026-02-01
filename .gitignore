@@ -22,6 +22,7 @@
 go.work
 
 .idea/
+.trae
 agent/.env
 examples/quickstart/config.yaml
 

@@ -30,3 +30,13 @@ func (v *PromptPilotConfig) MapEnvToConfig() {
 	v.ApiKey = utils.GetEnvWithDefault(common.AGENTPILOT_API_KEY)
 	v.WorkspaceId = utils.GetEnvWithDefault(common.AGENTPILOT_WORKSPACE_ID)
 }
+
+type CozeLoopAppConfig struct {
+	WorkspaceId string `yaml:"workspace_id"`
+	ApiToken    string `yaml:"api_token"`
+}
+
+func (v *CozeLoopAppConfig) MapEnvToConfig() {
+	v.WorkspaceId = utils.GetEnvWithDefault(common.COZELOOP_WORKSPACE_ID)
+	v.ApiToken = utils.GetEnvWithDefault(common.COZELOOP_API_TOKEN)
+}
