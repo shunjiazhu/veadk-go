@@ -8,5 +8,5 @@ observability:
     apmplus:
       endpoint: "http://apmplus-cn-beijing.volces.com:4317"
       api_key: ""
-      service_name: "adk.go.demo.v4"
+      service_name: "veadk.go.demo"
     

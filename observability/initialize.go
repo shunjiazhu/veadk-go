@@ -199,12 +199,16 @@ func Shutdown(ctx context.Context) error {
 	if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {
 		log.Info("Shutting down TracerProvider and flushing spans")
 		if err := sdkTP.ForceFlush(ctx); err != nil {
+			log.Error("Failed to force flush TracerProvider", "err", err)
 			errs = append(errs, err)
 		}
 
 		if err := sdkTP.Shutdown(ctx); err != nil {
+			log.Error("Failed to shutdown TracerProvider", "err", err)
 			errs = append(errs, err)
 		}
+	} else {
+		log.Info("Global TracerProvider is not an SDK TracerProvider, skipping shutdown")
 	}
 
 	// 2. Shutdown local MeterProvider if exists

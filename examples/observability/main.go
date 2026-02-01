@@ -1,27 +1,15 @@
-// Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
-//
-// Licensed under the Apache License, Beijing 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package main
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"os"
+	"time"
 
 	veagent "github.com/volcengine/veadk-go/agent/llmagent"
 	"github.com/volcengine/veadk-go/common"
 	"github.com/volcengine/veadk-go/observability"
+	"github.com/volcengine/veadk-go/tool/builtin_tools/web_search"
 	"github.com/volcengine/veadk-go/utils"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/cmd/launcher"
@@ -29,25 +17,35 @@ import (
 	"google.golang.org/adk/plugin"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 )
 
 func main() {
 	ctx := context.Background()
 	observability.Init(ctx)
 	defer func() {
-		_ = observability.Shutdown(ctx)
+		time.Sleep(1 * time.Second)
+		observability.Shutdown(ctx)
 	}()
 
-	// Create agent configuration
 	cfg := &veagent.Config{
 		ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
 		ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
 		ModelAPIKey:  utils.GetEnvWithDefault(common.MODEL_AGENT_API_KEY),
 	}
 
+	webSearch, err := web_search.NewWebSearchTool(&web_search.Config{})
+	if err != nil {
+		fmt.Printf("NewLLMAgent failed: %v", err)
+		return
+	}
+
+	cfg.Tools = []tool.Tool{webSearch}
+
 	a, err := veagent.New(cfg)
 	if err != nil {
-		log.Fatalf("NewLLMAgent failed: %v", err)
+		fmt.Printf("NewLLMAgent failed: %v", err)
+		return
 	}
 
 	config := &launcher.Config{
@@ -58,15 +56,8 @@ func main() {
 		},
 	}
 
-	// 2. Wrap the Launcher for full richness (Restore root span)
-	l := observability.NewObservedLauncher(full.NewLauncher())
-
-	// Run with CLI arguments
-	// Use os.Args[1:] to let ADK handle its own subcommands (console, api, etc.)
-	args := os.Args[1:]
-
-	log.Println("Starting Observed Launcher...")
-	if err = l.Execute(ctx, config, args); err != nil {
-		log.Printf("Run finished with error: %v", err)
+	l := full.NewLauncher()
+	if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
+		fmt.Printf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
 	}
 }

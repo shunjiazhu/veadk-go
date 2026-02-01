@@ -44,6 +44,8 @@ const (
 	stateKeyStreamingSpan   = "veadk.observability.streaming_span"
 	stateKeyAgentSpan       = "veadk.observability.agent_span"
 	stateKeyAgentCtx        = "veadk.observability.agent_ctx"
+	stateKeyInvocationSpan  = "veadk.observability.invocation_span"
+	stateKeyInvocationCtx   = "veadk.observability.invocation_ctx"
 	stateKeyStartTime       = "veadk.observability.start_time"
 	stateKeyFirstTokenTime  = "veadk.observability.first_token_time"
 )
@@ -79,6 +81,8 @@ func NewPlugin(opts ...Option) *plugin.Plugin {
 
 	pluginInstance, _ := plugin.New(plugin.Config{
 		Name:                "veadk-observability",
+		BeforeRunCallback:   p.BeforeRun,
+		AfterRunCallback:    p.AfterRun,
 		BeforeModelCallback: p.BeforeModel,
 		AfterModelCallback:  p.AfterModel,
 		BeforeToolCallback:  p.BeforeTool,
@@ -107,12 +111,94 @@ func (p *adkObservabilityPlugin) isMetricsEnabled() bool {
 	return true // Default to true if no config found
 }
 
+// BeforeRun is called before an agent run starts.
+func (p *adkObservabilityPlugin) BeforeRun(ctx agent.InvocationContext) (*genai.Content, error) {
+	// 1. Check if we're already inside an invocation span to avoid duplicates
+	existingSpan := trace.SpanFromContext(context.Context(ctx))
+	if existingSpan.SpanContext().IsValid() && existingSpan.IsRecording() {
+		// If we are already inside an invocation span, we can reuse it
+		// but typically we want the plugin to be self-contained.
+	}
+
+	// 2. Start the 'invocation' span
+	// Align with Python: name is "invocation"
+	// Use SpanKindServer for the root invocation span
+	newCtx, span := p.tracer.Start(context.Context(ctx), SpanInvocation, trace.WithSpanKind(trace.SpanKindServer))
+
+	// 3. Store in state for AfterRun and children
+	_ = ctx.Session().State().Set(stateKeyInvocationSpan, span)
+	_ = ctx.Session().State().Set(stateKeyInvocationCtx, newCtx)
+
+	// 4. Register this span as the root for this TraceID
+	sc := span.SpanContext()
+	if sc.IsValid() {
+		exporter.RegisterInvocationSpan(sc.TraceID(), span)
+	}
+
+	// 5. Set attributes
+	SetCommonAttributes(newCtx, span)
+	SetWorkflowAttributes(span)
+
+	// Record start time for metrics
+	_ = ctx.Session().State().Set(stateKeyStartTime, time.Now())
+
+	// Capture input from UserContent
+	if userContent := ctx.UserContent(); userContent != nil {
+		if jsonIn, err := json.Marshal(userContent); err == nil {
+			span.SetAttributes(attribute.String(AttrGenAIInputValue, string(jsonIn)))
+		}
+	}
+
+	return nil, nil
+}
+
+// AfterRun is called after an agent run ends.
+func (p *adkObservabilityPlugin) AfterRun(ctx agent.InvocationContext) {
+	// 1. End the span
+	if s, _ := ctx.Session().State().Get(stateKeyInvocationSpan); s != nil {
+		span := s.(trace.Span)
+		if span.IsRecording() {
+			// Clean up from global map
+			sc := span.SpanContext()
+			if sc.IsValid() {
+				exporter.UnregisterInvocationSpan(sc.TraceID())
+			}
+
+			// Capture final output if available
+			if cached, _ := ctx.Session().State().Get(stateKeyStreamingOutput); cached != nil {
+				if jsonOut, err := json.Marshal(cached); err == nil {
+					span.SetAttributes(attribute.String(AttrGenAIOutputValue, string(jsonOut)))
+				}
+			}
+
+			// Record final metrics for invocation
+			startTimeVal, _ := ctx.Session().State().Get(stateKeyStartTime);
+			if startTime, ok := startTimeVal.(time.Time); ok && !startTime.IsZero() {
+				elapsed := time.Since(startTime).Seconds()
+				metricAttrs := []attribute.KeyValue{
+					attribute.String("gen_ai_operation_name", "chain"),
+					attribute.String("gen_ai_operation_type", "workflow"),
+					attribute.String("gen_ai.system", "veadk"),
+				}
+				if p.isMetricsEnabled() {
+					RecordOperationDuration(context.Background(), elapsed, metricAttrs...)
+					RecordAPMPlusSpanLatency(context.Background(), elapsed, metricAttrs...)
+				}
+			}
+
+			span.End()
+		}
+	}
+}
+
 // BeforeModel is called before the LLM is called.
 func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
-	// 1. Get the agent context from state to maintain hierarchy for our manual span
+	// 1. Get the parent context from state to maintain hierarchy
 	parentCtx := context.Context(ctx)
 	if actx, _ := ctx.State().Get(stateKeyAgentCtx); actx != nil {
 		parentCtx = actx.(context.Context)
+	} else if ictx, _ := ctx.State().Get(stateKeyInvocationCtx); ictx != nil {
+		parentCtx = ictx.(context.Context)
 	}
 
 	// 2. Start our OWN span to cover the full duration of the call (including streaming).
@@ -742,14 +828,19 @@ func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.
 		agentName = FallbackAgentName
 	}
 
-	// 1. Start the 'invoke_agent' span manually.
+	// 1. Get the parent context from state to maintain hierarchy
+	parentCtx := context.Context(ctx)
+	if ictx, _ := ctx.State().Get(stateKeyInvocationCtx); ictx != nil {
+		parentCtx = ictx.(context.Context)
+	}
+
+	// 2. Start the 'invoke_agent' span manually.
 	// Since we can't easily wrap the Agent interface due to internal methods,
 	// we use the plugin to start our span.
-	parentCtx := context.Context(ctx)
 	spanName := SpanInvokeAgent + " " + agentName
 	newCtx, span := p.tracer.Start(parentCtx, spanName)
 
-	// 2. Store in state for AfterAgent
+	// 3. Store in state for AfterAgent
 	_ = ctx.State().Set(stateKeyAgentSpan, span)
 	_ = ctx.State().Set(stateKeyAgentCtx, newCtx)
 
