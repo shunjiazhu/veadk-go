@@ -97,24 +97,10 @@ func (m *openAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 	}
 
 	if stream {
-		next := m.generateStream(ctx, openaiReq)
-		return func(yield func(*model.LLMResponse, error) bool) {
-			for resp, err := range next {
-				if !yield(resp, err) {
-					return
-				}
-			}
-		}
+		return m.generateStream(ctx, openaiReq)
 	}
 
-	next := m.generate(ctx, openaiReq)
-	return func(yield func(*model.LLMResponse, error) bool) {
-		for resp, err := range next {
-			if !yield(resp, err) {
-				return
-			}
-		}
-	}
+	return m.generate(ctx, openaiReq)
 }
 
 type openAIRequest struct {
