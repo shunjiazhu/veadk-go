@@ -139,6 +139,26 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 		}
 	}
 
+	newAttrs = p.processAttributes(attrs, existingKeys)
+
+	// Dynamic Reconstruction: Tool Input/Output from raw attributes
+	if toolArgs != "" && toolName != "" {
+		if inputAttrs := p.reconstructToolInput(toolName, toolDesc, toolArgs); inputAttrs != nil {
+			newAttrs = append(newAttrs, inputAttrs...)
+		}
+	}
+
+	if toolResponse != "" && toolCallID != "" {
+		if outputAttrs := p.reconstructToolOutput(toolName, toolCallID, toolResponse); outputAttrs != nil {
+			newAttrs = append(newAttrs, outputAttrs...)
+		}
+	}
+
+	return newAttrs
+}
+
+func (p *translatedSpan) processAttributes(attrs []attribute.KeyValue, existingKeys map[string]bool) []attribute.KeyValue {
+	newAttrs := make([]attribute.KeyValue, 0, len(attrs))
 	for _, kv := range attrs {
 		key := string(kv.Key)
 
@@ -166,50 +186,48 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 
 		newAttrs = append(newAttrs, kv)
 	}
-
-	// Dynamic Reconstruction: Tool Input/Output from raw attributes
-	if toolArgs != "" && toolName != "" {
-		// Reconstruct Input
-		var paramsMap map[string]any
-		if err := json.Unmarshal([]byte(toolArgs), &paramsMap); err == nil {
-			inputData := map[string]any{
-				"name":        toolName,
-				"description": toolDesc,
-				"parameters":  paramsMap,
-			}
-			if inputJSON, err := json.Marshal(inputData); err == nil {
-				val := string(inputJSON)
-				newAttrs = append(newAttrs,
-					attribute.String(AttrGenAIToolInput, val),
-					attribute.String(AttrCozeloopInput, val),
-					attribute.String(AttrGenAIInput, val),
-				)
-			}
-		}
-	}
-
-	if toolResponse != "" && toolCallID != "" {
-		// Reconstruct Output
-		var responseMap map[string]any
-		// ADK serializes response as map, unmarshal it first
-		if err := json.Unmarshal([]byte(toolResponse), &responseMap); err == nil {
-			outputData := map[string]any{
-				"id":       toolCallID,
-				"name":     toolName,
-				"response": responseMap,
-			}
-			if outputJSON, err := json.Marshal(outputData); err == nil {
-				val := string(outputJSON)
-				newAttrs = append(newAttrs,
-					attribute.String(AttrGenAIToolOutput, val),
-					attribute.String(AttrCozeloopOutput, val),
-					attribute.String(AttrGenAIOutput, val),
-				)
-			}
-		}
-	}
-
 	return newAttrs
+}
+
+func (p *translatedSpan) reconstructToolInput(toolName, toolDesc, toolArgs string) []attribute.KeyValue {
+	var paramsMap map[string]any
+	if err := json.Unmarshal([]byte(toolArgs), &paramsMap); err == nil {
+		inputData := map[string]any{
+			"name":        toolName,
+			"description": toolDesc,
+			"parameters":  paramsMap,
+		}
+		if inputJSON, err := json.Marshal(inputData); err == nil {
+			val := string(inputJSON)
+			return []attribute.KeyValue{
+				attribute.String(AttrGenAIToolInput, val),
+				attribute.String(AttrCozeloopInput, val),
+				attribute.String(AttrGenAIInput, val),
+			}
+		}
+	}
+	return nil
+}
+
+func (p *translatedSpan) reconstructToolOutput(toolName, toolCallID, toolResponse string) []attribute.KeyValue {
+	var responseMap map[string]any
+	// ADK serializes response as map, unmarshal it first
+	if err := json.Unmarshal([]byte(toolResponse), &responseMap); err == nil {
+		outputData := map[string]any{
+			"id":       toolCallID,
+			"name":     toolName,
+			"response": responseMap,
+		}
+		if outputJSON, err := json.Marshal(outputData); err == nil {
+			val := string(outputJSON)
+			return []attribute.KeyValue{
+				attribute.String(AttrGenAIToolOutput, val),
+				attribute.String(AttrCozeloopOutput, val),
+				attribute.String(AttrGenAIOutput, val),
+			}
+		}
+	}
+	return nil
 }
 
 func (p *translatedSpan) SpanContext() oteltrace.SpanContext {

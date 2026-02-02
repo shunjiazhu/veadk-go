@@ -241,19 +241,43 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 	setLLMAttributes(span)
 
 	// Record request attributes
+	p.setLLMRequestAttributes(ctx, span, req)
+
+	// Capture messages in GenAI format for the span
+	messages := p.extractMessages(req)
+	var msgAttrs []attribute.KeyValue
+	messagesJSON, err := json.Marshal(messages)
+	if err == nil {
+		msgAttrs = append(msgAttrs, attribute.String(AttrGenAIMessages, string(messagesJSON)))
+	}
+
+	// Flatten messages for gen_ai.prompt.[n] attributes (alignment with python)
+	msgAttrs = append(msgAttrs, p.flattenPrompt(messages)...)
+
+	// Add input.value (standard for some collectors)
+	msgAttrs = append(msgAttrs, attribute.String(AttrGenAIInput, string(messagesJSON)))
+
+	msgAttrs = append(msgAttrs, attribute.String(AttrInputValue, string(messagesJSON)))
+
+	span.SetAttributes(msgAttrs...)
+
+	// Add gen_ai.messages events (system, user, tool, assistant) aligned with Python
+	p.addMessageEvents(span, ctx, req)
+
+	// Add gen_ai.content.prompt event (OTEL GenAI convention)
+	span.AddEvent(EventGenAIContentPrompt, trace.WithAttributes(
+		attribute.String(AttrGenAIPrompt, string(messagesJSON)),
+		attribute.String(AttrGenAIInput, string(messagesJSON)),
+	))
+
+	return nil, nil
+}
+
+func (p *adkObservabilityPlugin) setLLMRequestAttributes(ctx agent.CallbackContext, span trace.Span, req *model.LLMRequest) {
 	attrs := []attribute.KeyValue{
 		attribute.String(AttrGenAIRequestModel, req.Model),
 		attribute.String(AttrGenAIRequestType, "chat"), // Default to chat
 		attribute.String(AttrGenAISystem, GetModelProvider(context.Context(ctx))),
-	}
-
-	// Try to detect streaming from config (best effort)
-	if req.Config != nil {
-		// Assuming generic mechanism or specific field.
-		// If Model is OpenAI, we know how to check stream options, but here we only have generic config.
-		// Use a safe check if possible, or skip.
-		// Note: Python explicitly sets "gen_ai.is_streaming" if available.
-		// We'll leave it for now as it's optional and we handle stream metrics via AfterModel logic.
 	}
 
 	if req.Config != nil {
@@ -282,36 +306,8 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 				}
 			}
 		}
-
 	}
-
-	// Capture messages in GenAI format for the span
-	messages := p.extractMessages(req)
-	messagesJSON, err := json.Marshal(messages)
-	if err == nil {
-		attrs = append(attrs, attribute.String(AttrGenAIMessages, string(messagesJSON)))
-	}
-
-	// Flatten messages for gen_ai.prompt.[n] attributes (alignment with python)
-	attrs = append(attrs, p.flattenPrompt(messages)...)
-
-	// Add input.value (standard for some collectors)
-	attrs = append(attrs, attribute.String(AttrGenAIInput, string(messagesJSON)))
-
-	attrs = append(attrs, attribute.String(AttrInputValue, string(messagesJSON)))
-
 	span.SetAttributes(attrs...)
-
-	// Add gen_ai.messages events (system, user, tool, assistant) aligned with Python
-	p.addMessageEvents(span, ctx, req)
-
-	// Add gen_ai.content.prompt event (OTEL GenAI convention)
-	span.AddEvent(EventGenAIContentPrompt, trace.WithAttributes(
-		attribute.String(AttrGenAIPrompt, string(messagesJSON)),
-		attribute.String(AttrGenAIInput, string(messagesJSON)),
-	))
-
-	return nil, nil
 }
 
 // AfterModel is called after the LLM returns.
@@ -414,6 +410,42 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 	// ---------------------------------------------------------
 	// Metrics: Time to First Token (Streaming Only)
 	// ---------------------------------------------------------
+	p.recordTimeToFirstToken(ctx, resp, meta, currentAcc, finalModelName)
+
+	if resp.Content != nil {
+		currentAcc = p.processStreamingChunk(ctx, resp, currentAcc)
+	}
+
+	// For streaming, we update the span attributes with what we have so far
+	var fullText string
+	if currentAcc != nil {
+		fullText = p.updateStreamingSpanAttributes(span, currentAcc)
+	}
+
+	// Metrics: Time to Generate (Streaming Only) & Time Per Output Token
+	p.recordStreamingGenerationMetrics(ctx, resp, meta, currentAcc, finalModelName)
+
+	// If this is the final chunk, add the completion event
+	if !resp.Partial && currentAcc != nil {
+		contentJSON, _ := json.Marshal(currentAcc)
+		span.AddEvent(EventGenAIContentCompletion, trace.WithAttributes(
+			attribute.String(AttrGenAICompletion, string(contentJSON)),
+			attribute.String(AttrGenAIOutput, fullText),
+		))
+
+		// Add gen_ai.choice event (aligned with Python)
+		p.addChoiceEvents(span, currentAcc)
+	}
+
+	if !resp.Partial {
+		// Record Operation Duration and Latency
+		p.recordFinalResponseMetrics(ctx, meta, finalModelName)
+	}
+
+	return nil, nil
+}
+
+func (p *adkObservabilityPlugin) recordTimeToFirstToken(ctx agent.CallbackContext, resp *model.LLMResponse, meta *spanMetadata, currentAcc *genai.Content, finalModelName string) {
 	if resp.Partial && currentAcc == nil && resp.Content != nil {
 		// This is the very first chunk
 		if !meta.StartTime.IsZero() {
@@ -433,65 +465,66 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 			}
 		}
 	}
+}
 
-	if resp.Content != nil {
-		if currentAcc == nil {
-			currentAcc = &genai.Content{Role: resp.Content.Role}
-			if currentAcc.Role == "" {
-				currentAcc.Role = "model"
-			}
+func (p *adkObservabilityPlugin) processStreamingChunk(ctx agent.CallbackContext, resp *model.LLMResponse, currentAcc *genai.Content) *genai.Content {
+	if currentAcc == nil {
+		currentAcc = &genai.Content{Role: resp.Content.Role}
+		if currentAcc.Role == "" {
+			currentAcc.Role = "model"
 		}
-
-		// If this is the final response, our implementation (like OpenAI) often sends the full content.
-		// We clear our previous accumulation to avoid duplication in the span attributes.
-		// We only do this if the final response actually contains content.
-		if !resp.Partial && resp.Content != nil && len(resp.Content.Parts) > 0 {
-			currentAcc.Parts = nil
-		}
-
-		// Accumulate parts with merging of adjacent text
-		for _, part := range resp.Content.Parts {
-			// If it's a text part, try to merge with the last part if that was also text
-			if part.Text != "" && len(currentAcc.Parts) > 0 {
-				lastPart := currentAcc.Parts[len(currentAcc.Parts)-1]
-				if lastPart.Text != "" && lastPart.FunctionCall == nil && lastPart.FunctionResponse == nil && lastPart.InlineData == nil {
-					lastPart.Text += part.Text
-					continue
-				}
-			}
-
-			// Otherwise append as a new part
-			newPart := &genai.Part{}
-			*newPart = *part
-			currentAcc.Parts = append(currentAcc.Parts, newPart)
-		}
-		_ = ctx.State().Set(stateKeyStreamingOutput, currentAcc)
 	}
 
-	// For streaming, we update the span attributes with what we have so far
-	var fullText string
-	if currentAcc != nil {
-		// Set output.value to the cumulative text (parity with python)
-		var textParts strings.Builder
-		textParts.Grow(len(currentAcc.Parts) * 4)
-		for _, p := range currentAcc.Parts {
-			if p.Text != "" {
-				textParts.WriteString(p.Text)
-			}
-		}
-		fullText = textParts.String()
-		span.SetAttributes(attribute.String(AttrGenAIOutput, fullText))
-
-		// Add output.value for full JSON representation
-		if contentJSON, err := json.Marshal(currentAcc); err == nil {
-			span.SetAttributes(attribute.String("output.value", string(contentJSON)))
-		}
-
-		// Also set the structured GenAI attributes
-		span.SetAttributes(p.flattenCompletion(currentAcc)...)
+	// If this is the final response, our implementation (like OpenAI) often sends the full content.
+	// We clear our previous accumulation to avoid duplication in the span attributes.
+	// We only do this if the final response actually contains content.
+	if !resp.Partial && resp.Content != nil && len(resp.Content.Parts) > 0 {
+		currentAcc.Parts = nil
 	}
 
-	// Metrics: Time to Generate (Streaming Only) & Time Per Output Token
+	// Accumulate parts with merging of adjacent text
+	for _, part := range resp.Content.Parts {
+		// If it's a text part, try to merge with the last part if that was also text
+		if part.Text != "" && len(currentAcc.Parts) > 0 {
+			lastPart := currentAcc.Parts[len(currentAcc.Parts)-1]
+			if lastPart.Text != "" && lastPart.FunctionCall == nil && lastPart.FunctionResponse == nil && lastPart.InlineData == nil {
+				lastPart.Text += part.Text
+				continue
+			}
+		}
+
+		// Otherwise append as a new part
+		newPart := &genai.Part{}
+		*newPart = *part
+		currentAcc.Parts = append(currentAcc.Parts, newPart)
+	}
+	_ = ctx.State().Set(stateKeyStreamingOutput, currentAcc)
+	return currentAcc
+}
+
+func (p *adkObservabilityPlugin) updateStreamingSpanAttributes(span trace.Span, currentAcc *genai.Content) string {
+	// Set output.value to the cumulative text (parity with python)
+	var textParts strings.Builder
+	textParts.Grow(len(currentAcc.Parts) * 4)
+	for _, p := range currentAcc.Parts {
+		if p.Text != "" {
+			textParts.WriteString(p.Text)
+		}
+	}
+	fullText := textParts.String()
+	span.SetAttributes(attribute.String(AttrGenAIOutput, fullText))
+
+	// Add output.value for full JSON representation
+	if contentJSON, err := json.Marshal(currentAcc); err == nil {
+		span.SetAttributes(attribute.String("output.value", string(contentJSON)))
+	}
+
+	// Also set the structured GenAI attributes
+	span.SetAttributes(p.flattenCompletion(currentAcc)...)
+	return fullText
+}
+
+func (p *adkObservabilityPlugin) recordStreamingGenerationMetrics(ctx agent.CallbackContext, resp *model.LLMResponse, meta *spanMetadata, currentAcc *genai.Content, finalModelName string) {
 	if !resp.Partial && currentAcc != nil {
 		if !meta.StartTime.IsZero() {
 			// Time Per Output Token
@@ -515,38 +548,22 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 			}
 		}
 	}
+}
 
-	// If this is the final chunk, add the completion event
-	if !resp.Partial && currentAcc != nil {
-		contentJSON, _ := json.Marshal(currentAcc)
-		span.AddEvent(EventGenAIContentCompletion, trace.WithAttributes(
-			attribute.String(AttrGenAICompletion, string(contentJSON)),
-			attribute.String(AttrGenAIOutput, fullText),
-		))
-
-		// Add gen_ai.choice event (aligned with Python)
-		p.addChoiceEvents(span, currentAcc)
-	}
-
-	if !resp.Partial {
-		// Record Operation Duration and Latency
-		if !meta.StartTime.IsZero() {
-			duration := time.Since(meta.StartTime).Seconds()
-			metricAttrs := []attribute.KeyValue{
-				attribute.String(AttrGenAISystem, GetModelProvider(context.Context(ctx))),
-				attribute.String("gen_ai_response_model", finalModelName),
-				attribute.String("gen_ai_operation_name", "chat"),
-				attribute.String("gen_ai_operation_type", "llm"),
-			}
-			if p.isMetricsEnabled() {
-				RecordOperationDuration(context.Context(ctx), duration, metricAttrs...)
-				RecordAPMPlusSpanLatency(context.Context(ctx), duration, metricAttrs...)
-			}
+func (p *adkObservabilityPlugin) recordFinalResponseMetrics(ctx agent.CallbackContext, meta *spanMetadata, finalModelName string) {
+	if !meta.StartTime.IsZero() {
+		duration := time.Since(meta.StartTime).Seconds()
+		metricAttrs := []attribute.KeyValue{
+			attribute.String(AttrGenAISystem, GetModelProvider(context.Context(ctx))),
+			attribute.String("gen_ai_response_model", finalModelName),
+			attribute.String("gen_ai_operation_name", "chat"),
+			attribute.String("gen_ai_operation_type", "llm"),
 		}
-
+		if p.isMetricsEnabled() {
+			RecordOperationDuration(context.Context(ctx), duration, metricAttrs...)
+			RecordAPMPlusSpanLatency(context.Context(ctx), duration, metricAttrs...)
+		}
 	}
-
-	return nil, nil
 }
 
 func (p *adkObservabilityPlugin) handleUsage(ctx agent.CallbackContext, span trace.Span, resp *model.LLMResponse, isStream bool, modelName string) {
