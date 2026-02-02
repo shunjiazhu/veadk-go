@@ -21,8 +21,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-
-	// Important: Always call Shutdown to flush spans and metrics
+	// Shutdown to flush spans and metrics
 	defer observability.Shutdown(ctx)
 
 	cfg := &veagent.Config{

@@ -286,7 +286,7 @@ func (r *TraceRegistry) ScheduleCleanup(adkTraceID trace.TraceID, internalRunID 
 		adkTraceID:    adkTraceID,
 		internalRunID: internalRunID,
 		veadkSpanID:   veadkSpanID,
-		deadline:      time.Now().Add(5 * time.Minute),
+		deadline:      time.Now().Add(2 * time.Minute),
 	}:
 	default:
 		log.Warn("trace cleanup queue is full")
