@@ -4,8 +4,8 @@ This package provides comprehensive observability features for the VeADK Go SDK,
 
 ## Features
 
-- **Full Python ADK Alignment**: Implements the same span attributes, event structures, and naming conventions as the Python ADK
-- **Multi-Platform Support**: Simultaneously export traces to CozeLoop, APMPlus, Volcano TLS, or local files/stdout
+- **Python ADK Alignment**: Implements the same span attributes, event structures, and naming conventions as the Python ADK
+- **Multi-Platform Support**: Simultaneously export traces to APMPlus, CozeLoop, Volcano TLS, or local files/stdout
 - **Automatic Attribute Enrichment**: Automatically captures and propagates `SessionID`, `UserID`, `AppName`, `InvocationID` from context, config, or environment
 - **Span Hierarchy Support**: Properly tracks invocation → agent → LLM/tool execution hierarchies
 - **Metrics Support**: Automated recording of token usage, operation latencies, and first token latency
@@ -62,19 +62,10 @@ Add an `observability` section to your `config.yaml`:
 ```yaml
 observability:
   opentelemetry:
-    enable_global_provider: true  # Enable global OTel provider (optional)
-    cozeloop:
-      endpoint: "https://api.coze.cn/v1/loop/opentelemetry/v1/traces"
-      api_key: "YOUR_COZE_API_KEY"
-      service_name: "YOUR_COZE_SPACE_ID"
     apmplus:
       endpoint: "https://apmplus-cn-beijing.volces.com:4318"
       api_key: "YOUR_APMPLUS_API_KEY"
       service_name: "YOUR_SERVICE_NAME"
-    tls:
-      endpoint: "https://tls-cn-beijing.volces.com:4318/v1/traces"
-      service_name: "YOUR_TLS_TOPIC"
-      region: "cn-beijing"
 ```
 
 ### Environment Variables
@@ -83,19 +74,14 @@ All settings can be overridden via environment variables:
 
 - `OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY`
 - `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`
-- `OBSERVABILITY_OPENTELEMETRY_ENABLE_GLOBAL_PROVIDER` (default: false)
+- `OBSERVABILITY_OPENTELEMETRY_ENABLE_GLOBAL_PROVIDER` (default: true)
 - `VEADK_USER_ID` - Set default user ID
 - `VEADK_SESSION_ID` - Set default session ID
 - `VEADK_APP_NAME` - Set default app name
 - `VEADK_MODEL_PROVIDER` - Set model provider
-- `VEADK_CALL_TYPE` - Set call type
+
 
 ## Usage
-
-### Simple Initialization
-
-The easiest way to start is using the global configuration:
-`
 
 ### Observability Plugin
 

@@ -154,6 +154,11 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 		}
 	}
 
+	// Enrich with Span Kind if it's determined to be a tool span
+	if toolName != "" || toolCallID != "" {
+		newAttrs = append(newAttrs, attribute.String(AttrGenAISpanKind, SpanKindTool))
+	}
+
 	return newAttrs
 }
 

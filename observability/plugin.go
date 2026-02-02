@@ -875,34 +875,13 @@ func (p *adkObservabilityPlugin) flattenCompletion(content *genai.Content) []att
 	return attrs
 }
 
+// BeforeTool is called before a tool is executed.
 func (p *adkObservabilityPlugin) BeforeTool(ctx tool.Context, tool tool.Tool, args map[string]any) (map[string]any, error) {
-	// Set Standard Attributes if Span is somehow available (best effort)
-	// We still try this in case ADK behavior changes or for some tool types it works.
-	span := trace.SpanFromContext(context.Context(ctx))
-	toolCallID := ctx.FunctionCallID()
-	log.Debug("BeforeTool: get a span from context", "toolCallID", toolCallID, "span", span.SpanContext())
+	// Note: In Google ADK-go, the execute_tool span is often not available in the context at this stage.
+	// We rely on VeADKTranslatedExporter (translator.go) to reconstruct tool attributes from the
+	// span after it is ended and exported.
 
-	if span.SpanContext().IsValid() {
-		activeCtx := context.Context(ctx)
-		setCommonAttributes(activeCtx, span)
-		setToolAttributes(span, tool.Name())
-
-		// Set Tool Input attributes directly
-		inputData := map[string]any{
-			"name":        tool.Name(),
-			"description": tool.Description(),
-			"parameters":  args,
-		}
-		if jsonBytes, err := json.Marshal(inputData); err == nil {
-			val := string(jsonBytes)
-			span.SetAttributes(
-				attribute.String(AttrGenAIToolInput, val),
-				attribute.String(AttrGenAIInput, val),
-				attribute.String(AttrCozeloopInput, val),
-			)
-		}
-	}
-
+	// Maintain metadata for metrics calculation
 	meta := p.getSpanMetadata(ctx.State())
 	meta.StartTime = time.Now()
 	p.storeSpanMetadata(ctx.State(), meta)
@@ -911,35 +890,7 @@ func (p *adkObservabilityPlugin) BeforeTool(ctx tool.Context, tool tool.Tool, ar
 
 // AfterTool is called after a tool is executed.
 func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
-	span := trace.SpanFromContext(context.Context(ctx))
-	toolCallID := ctx.FunctionCallID()
-	log.Debug("AfterTool: get a span from context", "toolCallID", toolCallID, "span", span.SpanContext(), "isRecording", span.IsRecording())
-
-	var outputJSONLen int64
-
-	if span.IsRecording() {
-		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
-		}
-
-		// Set Tool Output attributes directly
-		outputData := map[string]any{
-			"id":       toolCallID,
-			"name":     tool.Name(),
-			"response": result,
-		}
-		if jsonBytes, err := json.Marshal(outputData); err == nil {
-			val := string(jsonBytes)
-			outputJSONLen = int64(len(val))
-			span.SetAttributes(
-				attribute.String(AttrGenAIToolOutput, val),
-				attribute.String(AttrGenAIOutput, val),
-				attribute.String(AttrCozeloopOutput, val),
-			)
-		}
-	}
-
-	// Metrics
+	// Metrics recording only
 	meta := p.getSpanMetadata(ctx.State())
 	if !meta.StartTime.IsZero() {
 		duration := time.Since(meta.StartTime).Seconds()
@@ -955,21 +906,17 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 
 		if p.isMetricsEnabled() {
 			// Tool Token Usage (Estimated)
-			// Input Chars: Try to get from State (calculated in BeforeTool)
+
+			// Input Chars
 			var inputChars int64
-			// Fallback: Marshal args if state missing
 			if argsJSON, err := json.Marshal(args); err == nil {
 				inputChars = int64(len(argsJSON))
 			}
 
-			// Output Chars: Use calculated outputJSONLen or fallback to result marshal
+			// Output Chars
 			var outputChars int64
-			if outputJSONLen > 0 {
-				outputChars = outputJSONLen
-			} else {
-				if resultJSON, err := json.Marshal(result); err == nil {
-					outputChars = int64(len(resultJSON))
-				}
+			if resultJSON, err := json.Marshal(result); err == nil {
+				outputChars = int64(len(resultJSON))
 			}
 
 			if inputChars > 0 {
