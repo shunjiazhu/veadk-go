@@ -46,9 +46,6 @@ func (p *VeADKSpanProcessor) OnStart(ctx context.Context, s trace.ReadWriteSpan)
 		RegisterAgentSpanContext(traceID, sc)
 	}
 
-	// 3. (Optional) Perform light enrichment if needed at start time.
-	// Most attribute mapping is deferred to the Translator in ExportSpans
-	// to handle attributes added late in the span lifecycle.
 }
 
 func (p *VeADKSpanProcessor) OnEnd(s trace.ReadOnlySpan) {

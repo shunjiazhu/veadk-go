@@ -95,18 +95,7 @@ All settings can be overridden via environment variables:
 ### Simple Initialization
 
 The easiest way to start is using the global configuration:
-
-```go
-import "github.com/volcengine/veadk-go/observability"
-
-func main() {
-    ctx := context.Background()
-    // Initializes exporters based on config.yaml or env vars
-    if err := observability.Init(ctx); err != nil {
-        log.Printf("Failed to init observability: %v", err)
-    }
-}
-```
+`
 
 ### Observability Plugin
 
@@ -122,10 +111,6 @@ import (
 
 func main() {
     ctx := context.Background()
-    observability.Init(ctx)
-    defer observability.Shutdown(ctx)
-
-    // ... setup agent ...
 
     config := &launcher.Config{
         AgentLoader:    agent.NewSingleLoader(a),

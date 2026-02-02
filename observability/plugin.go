@@ -513,6 +513,7 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 			// span_enrich recorded exception if status code was Error.
 			// We handled err at top of function.
 		}
+
 	}
 
 	return nil, nil
@@ -592,8 +593,9 @@ func (p *adkObservabilityPlugin) addUserMessageEvents(span trace.Span, ctx agent
 			attrs := []attribute.KeyValue{}
 			if part.Text != "" {
 				attrs = append(attrs, attribute.String("parts."+strconv.Itoa(i)+".type", "text"))
-				attrs = append(attrs, attribute.String("parts."+strconv.Itoa(i)+".content", part.Text))
+				attrs = append(attrs, attribute.String("parts."+strconv.Itoa(i)+".content", sanitizeUTF8(part.Text)))
 			}
+
 			// TODO: Handle other part types if needed for full alignment
 
 			if len(attrs) > 0 {
@@ -608,7 +610,7 @@ func (p *adkObservabilityPlugin) addChoiceEvents(span trace.Span, content *genai
 		attrs := []attribute.KeyValue{}
 		if part.Text != "" {
 			attrs = append(attrs, attribute.String("message.parts."+strconv.Itoa(i)+".type", "text"))
-			attrs = append(attrs, attribute.String("message.parts."+strconv.Itoa(i)+".text", part.Text))
+			attrs = append(attrs, attribute.String("message.parts."+strconv.Itoa(i)+".text", sanitizeUTF8(part.Text)))
 		}
 		if len(attrs) > 0 {
 			span.AddEvent("gen_ai.choice", trace.WithAttributes(attrs...))
@@ -635,7 +637,7 @@ func (p *adkObservabilityPlugin) extractMessages(req *model.LLMRequest) []map[st
 
 		for _, part := range content.Parts {
 			if part.Text != "" {
-				textParts = append(textParts, part.Text)
+				textParts = append(textParts, sanitizeUTF8(part.Text))
 			}
 			if part.FunctionCall != nil {
 				toolCalls = append(toolCalls, map[string]any{
@@ -741,7 +743,7 @@ func (p *adkObservabilityPlugin) flattenCompletion(content *genai.Content) []att
 		attrs = append(attrs, attribute.String(prefix+".role", role))
 
 		if part.Text != "" {
-			attrs = append(attrs, attribute.String(prefix+".content", part.Text))
+			attrs = append(attrs, attribute.String(prefix+".content", sanitizeUTF8(part.Text)))
 		}
 		if part.FunctionCall != nil {
 			tcPrefix := prefix + ".tool_calls.0"
@@ -755,14 +757,26 @@ func (p *adkObservabilityPlugin) flattenCompletion(content *genai.Content) []att
 	return attrs
 }
 
+// sanitizeUTF8 removes or replaces invalid UTF-8 characters from a string
+func sanitizeUTF8(s string) string {
+	// If the string is already valid UTF-8, return it as is
+	if len(s) == 0 {
+		return s
+	}
+
+	// Replace invalid UTF-8 sequences with Unicode replacement character
+	return string([]rune(s))
+}
+
 func safeMarshal(v any) string {
 	if v == nil {
 		return ""
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
-		return "{}"
+		return ""
 	}
+
 	return string(b)
 }
 

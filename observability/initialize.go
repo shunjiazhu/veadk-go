@@ -36,7 +36,8 @@ var (
 )
 
 // Init initializes the observability system using the global configuration.
-// It automatically maps environment variables and YAML values.
+// Users usually don't need to call this function directly unless they want to override the default global configuration.
+// NewPlugin will call this function to initialize observability once.
 func Init(ctx context.Context, cfg *configs.ObservabilityConfig) error {
 	var err error
 	var initialized bool
@@ -62,23 +63,6 @@ func Init(ctx context.Context, cfg *configs.ObservabilityConfig) error {
 		log.Info("Initializing TraceProvider and MetricsProvider based on observability config")
 	}
 	return err
-}
-
-// initWithConfig automatically initializes the observability system based on the provided configuration.
-// It creates the appropriate exporter and calls RegisterExporter.
-func initWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	var errs []error
-	err := initializeTraceProvider(ctx, cfg)
-	if err != nil {
-		errs = append(errs, err)
-	}
-
-	err = initializeMeterProvider(ctx, cfg)
-	if err != nil {
-		errs = append(errs, err)
-	}
-
-	return errors.Join(errs...)
 }
 
 // Shutdown shuts down the observability system, flushing all spans and metrics.
@@ -118,6 +102,23 @@ func Shutdown(ctx context.Context) error {
 		if err := globalMeterProvider.Shutdown(ctx); err != nil {
 			errs = append(errs, err)
 		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// initWithConfig automatically initializes the observability system based on the provided configuration.
+// It creates the appropriate exporter and calls RegisterExporter.
+func initWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+	var errs []error
+	err := initializeTraceProvider(ctx, cfg)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	err = initializeMeterProvider(ctx, cfg)
+	if err != nil {
+		errs = append(errs, err)
 	}
 
 	return errors.Join(errs...)
