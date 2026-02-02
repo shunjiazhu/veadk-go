@@ -1,8 +1,6 @@
 observability:
   opentelemetry:
     enable_metrics: true
-    stdout:
-      enable: true
     file: 
       path: ./go_output.txt
     apmplus:

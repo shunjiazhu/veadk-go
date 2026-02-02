@@ -24,7 +24,6 @@ import (
 
 	"github.com/volcengine/veadk-go/configs"
 	"github.com/volcengine/veadk-go/log"
-	"github.com/volcengine/veadk-go/observability/exporter"
 	"google.golang.org/adk/telemetry"
 
 	"go.opentelemetry.io/otel"
@@ -36,7 +35,8 @@ var (
 )
 
 // Init initializes the observability system using the global configuration.
-// It automatically maps environment variables and YAML values.
+// Users usually don't need to call this function directly unless they want to override the default global configuration.
+// NewPlugin will call this function to initialize observability once.
 func Init(ctx context.Context, cfg *configs.ObservabilityConfig) error {
 	var err error
 	var initialized bool
@@ -64,35 +64,19 @@ func Init(ctx context.Context, cfg *configs.ObservabilityConfig) error {
 	return err
 }
 
-// initWithConfig automatically initializes the observability system based on the provided configuration.
-// It creates the appropriate exporter and calls RegisterExporter.
-func initWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	var errs []error
-	err := initializeTraceProvider(ctx, cfg)
-	if err != nil {
-		errs = append(errs, err)
-	}
-
-	err = initializeMeterProvider(ctx, cfg)
-	if err != nil {
-		errs = append(errs, err)
-	}
-
-	return errors.Join(errs...)
-}
-
 // Shutdown shuts down the observability system, flushing all spans and metrics.
 func Shutdown(ctx context.Context) error {
+	log.Info("Shut down TracerProvider and MeterProvider")
 	var errs []error
 
 	// 0. End all active root invocation spans to ensure they are recorded and flushed.
 	// This handles cases like Ctrl+C or premature exit where defer blocks might not run.
-	exporter.EndAllInvocationSpans()
+	GetRegistry().EndAllInvocationSpans()
+	GetRegistry().Shutdown()
 
 	// 1. Shutdown TracerProvider
 	tp := otel.GetTracerProvider()
 	if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {
-		log.Info("Shutting down TracerProvider and flushing spans")
 		if err := sdkTP.ForceFlush(ctx); err != nil {
 			log.Error("Failed to force flush TracerProvider", "err", err)
 			errs = append(errs, err)
@@ -123,8 +107,25 @@ func Shutdown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// initWithConfig automatically initializes the observability system based on the provided configuration.
+// It creates the appropriate exporter and calls RegisterExporter.
+func initWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+	var errs []error
+	err := initializeTraceProvider(ctx, cfg)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	err = initializeMeterProvider(ctx, cfg)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	return errors.Join(errs...)
+}
+
 func newVeadkExporter(exp sdktrace.SpanExporter) sdktrace.SpanExporter {
-	return &exporter.ADKTranslatedExporter{SpanExporter: exp}
+	return &VeADKTranslatedExporter{SpanExporter: exp}
 }
 
 // AddSpanExporter registers an exporter to Google ADK's local telemetry.
@@ -142,7 +143,7 @@ func AddGlobalSpanExporter(exp sdktrace.SpanExporter) {
 
 // setGlobalTracerProvider configures the global OpenTelemetry TracerProvider.
 func setGlobalTracerProvider(exp sdktrace.SpanExporter, spanProcessors ...sdktrace.SpanProcessor) {
-	// Always wrap with ADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
+	// Always wrap with VeADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
 	translatedExp := newVeadkExporter(exp)
 
 	// Default processors
@@ -181,12 +182,11 @@ func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) err
 		return nil
 	}
 
-	exp, err := exporter.NewMultiExporter(ctx, cfg)
+	exp, err := NewMultiExporter(ctx, cfg)
 	if err != nil {
 		return err
 	}
 
-	telemetry.RegisterSpanProcessor(exporter.NewVeADKSpanProcessor())
 	AddSpanExporter(exp)
 	return nil
 }
@@ -194,13 +194,13 @@ func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) err
 func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
 	log.Info("Registering ADK Global TracerProvider")
 
-	globalExp, err := exporter.NewMultiExporter(ctx, cfg)
+	globalExp, err := NewMultiExporter(ctx, cfg)
 	if err != nil {
 		return err
 	}
 
 	if globalExp != nil {
-		setGlobalTracerProvider(globalExp, exporter.NewVeADKSpanProcessor())
+		setGlobalTracerProvider(globalExp)
 	}
 	return nil
 }
@@ -231,19 +231,19 @@ func initializeMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConf
 	}
 
 	if cfg.EnableLocalProvider {
-		readers, err := exporter.NewMetricReader(ctx, cfg)
+		readers, err := NewMetricReader(ctx, cfg)
 		if err != nil {
 			errs = append(errs, err)
 		}
-		RegisterLocalMetrics(readers)
+		registerLocalMetrics(readers)
 	}
 
 	if cfg.EnableGlobalProvider {
-		globalReaders, err := exporter.NewMetricReader(ctx, cfg)
+		globalReaders, err := NewMetricReader(ctx, cfg)
 		if err != nil {
 			errs = append(errs, err)
 		}
-		RegisterGlobalMetrics(globalReaders)
+		registerGlobalMetrics(globalReaders)
 	}
 	return errors.Join(errs...)
 }
@@ -254,8 +254,7 @@ func handleSignals(ctx context.Context) {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		sig := <-sigChan
-		log.Info("Received signal, performing graceful shutdown", "signal", sig)
+		<-sigChan
 
 		// Trigger shutdown which will flush all processors (including BatchSpanProcessor)
 		_ = Shutdown(ctx)

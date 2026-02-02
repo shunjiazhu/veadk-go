@@ -57,11 +57,12 @@ var (
 	globalMeterProvider *sdkmetric.MeterProvider
 
 	// Standard Gen AI Metrics
-	tokenUsageHistograms                  []metric.Float64Histogram
-	operationDurationHistograms           []metric.Float64Histogram
+	tokenUsageHistograms        []metric.Float64Histogram
+	operationDurationHistograms []metric.Float64Histogram
+	chatCountCounters           []metric.Int64Counter
+	exceptionsCounters          []metric.Int64Counter
+	// streaming metrics
 	streamingTimeToFirstTokenHistograms   []metric.Float64Histogram
-	chatCountCounters                     []metric.Int64Counter
-	exceptionsCounters                    []metric.Int64Counter
 	streamingTimeToGenerateHistograms     []metric.Float64Histogram
 	streamingTimePerOutputTokenHistograms []metric.Float64Histogram
 
@@ -70,9 +71,9 @@ var (
 	apmPlusToolTokenUsageHistograms []metric.Float64Histogram
 )
 
-// RegisterLocalMetrics initializes the metrics system with a local isolated MeterProvider.
+// registerLocalMetrics initializes the metrics system with a local isolated MeterProvider.
 // It does NOT overwrite the global OTel MeterProvider.
-func RegisterLocalMetrics(readers []sdkmetric.Reader) {
+func registerLocalMetrics(readers []sdkmetric.Reader) {
 	localOnce.Do(func() {
 		options := []sdkmetric.Option{}
 		for _, r := range readers {
@@ -85,9 +86,9 @@ func RegisterLocalMetrics(readers []sdkmetric.Reader) {
 	})
 }
 
-// RegisterGlobalMetrics configures the global OpenTelemetry MeterProvider with the provided readers.
+// registerGlobalMetrics configures the global OpenTelemetry MeterProvider with the provided readers.
 // This is optional and used when you want unrelated OTel measurements to also be exported.
-func RegisterGlobalMetrics(readers []sdkmetric.Reader) {
+func registerGlobalMetrics(readers []sdkmetric.Reader) {
 	globalOnce.Do(func() {
 		options := []sdkmetric.Option{}
 		for _, r := range readers {
@@ -206,11 +207,11 @@ func RecordTokenUsage(ctx context.Context, input, output int64, attrs ...attribu
 	for _, histogram := range tokenUsageHistograms {
 		if input > 0 {
 			histogram.Record(ctx, float64(input), metric.WithAttributes(
-				append(attrs, attribute.String("gen_ai_token_type", "input"))...))
+				append(attrs, attribute.String(AttrGenAITokenType, "input"))...))
 		}
 		if output > 0 {
 			histogram.Record(ctx, float64(output), metric.WithAttributes(
-				append(attrs, attribute.String("gen_ai_token_type", "output"))...))
+				append(attrs, attribute.String(AttrGenAITokenType, "output"))...))
 		}
 	}
 }
@@ -219,14 +220,6 @@ func RecordTokenUsage(ctx context.Context, input, output int64, attrs ...attribu
 func RecordOperationDuration(ctx context.Context, durationSeconds float64, attrs ...attribute.KeyValue) {
 	for _, histogram := range operationDurationHistograms {
 		histogram.Record(ctx, durationSeconds, metric.WithAttributes(attrs...))
-	}
-}
-
-// RecordFirstTokenLatency records the latency to the first token.
-// This function is maintained for backward compatibility
-func RecordFirstTokenLatency(ctx context.Context, latencySeconds float64, attrs ...attribute.KeyValue) {
-	for _, histogram := range streamingTimeToFirstTokenHistograms {
-		histogram.Record(ctx, latencySeconds, metric.WithAttributes(attrs...))
 	}
 }
 

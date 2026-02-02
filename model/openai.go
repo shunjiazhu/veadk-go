@@ -293,7 +293,6 @@ func (m *openAIModel) convertOpenAIRequest(req *model.LLMRequest) (*openAIReques
 		}
 	}
 
-	// Enable token usage in streaming responses (OpenAI compatible)
 	openaiReq.StreamOptions = &streamOptions{IncludeUsage: true}
 
 	return openaiReq, nil
