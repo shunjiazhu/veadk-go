@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/volcengine/veadk-go/log"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	"go.opentelemetry.io/otel/sdk/trace"
@@ -67,7 +68,43 @@ func (e *ADKTranslatedExporter) ExportSpans(ctx context.Context, spans []trace.R
 			continue
 		}
 
-		translated = append(translated, &translatedSpan{ReadOnlySpan: s})
+		ts := &translatedSpan{ReadOnlySpan: s}
+		translated = append(translated, ts)
+
+		// 1. Logic stitching via ToolCallID
+		toolCallID := ""
+		for _, kv := range s.Attributes() {
+			if string(kv.Key) == "gen_ai.tool.call.id" {
+				toolCallID = kv.Value.AsString()
+				break
+			}
+		}
+
+		if toolCallID != "" {
+			if manualParentSC, ok := getManualParentContextByToolCallID(toolCallID); ok {
+				// We found a match! Record this TraceID mapping to align other spans in the same trace (like merged spans)
+				registerTraceMapping(s.SpanContext().TraceID(), manualParentSC.TraceID())
+				log.Debug("Matched tool via ToolCallID, established TraceID mapping",
+					"tool_call_id", toolCallID,
+					"internal_trace_id", s.SpanContext().TraceID().String(),
+					"manual_trace_id", manualParentSC.TraceID().String(),
+				)
+			}
+		}
+
+		// Debug logging for execute_tool
+		if strings.Contains(s.Name(), "execute_tool") {
+			sc := ts.SpanContext()
+			parent := ts.Parent()
+			log.Debug("Translating tool span",
+				"name", s.Name(),
+				"orig_span_id", s.SpanContext().SpanID().String(),
+				"orig_trace_id", s.SpanContext().TraceID().String(),
+				"new_trace_id", sc.TraceID().String(),
+				"orig_parent_id", s.Parent().SpanID().String(),
+				"new_parent_id", parent.SpanID().String(),
+			)
+		}
 	}
 
 	if len(translated) == 0 {
@@ -129,31 +166,82 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 	return newAttrs
 }
 
-func (p *translatedSpan) Parent() oteltrace.SpanContext {
-	parent := p.ReadOnlySpan.Parent()
+func (p *translatedSpan) SpanContext() oteltrace.SpanContext {
 	sc := p.ReadOnlySpan.SpanContext()
-	name := p.ReadOnlySpan.Name()
 
-	// -------------------------------------------------------------------------
-	// [Thin Layer] Hierarchy Correction.
-	// ADK-go starts internal spans without knowledge of our plugin spans.
-	// We sew them together here by mapping internal ParentIDs to our ManualIDs.
-	// -------------------------------------------------------------------------
-
-	// 1. Precise Re-parenting based on ID mapping (covers Tools -> LLM, LLM -> Agent, Agent -> Run)
-	if parent.IsValid() {
-		if manualSC, ok := getManualParentContext(parent.SpanID()); ok {
-			// Ensure we don't create a self-loop
-			if manualSC.SpanID() != sc.SpanID() {
-				return manualSC
-			}
+	// [Thin Layer] TraceID Correction.
+	// 1. Try ToolCallID mapping (most precise)
+	toolCallID := ""
+	for _, kv := range p.ReadOnlySpan.Attributes() {
+		if string(kv.Key) == "gen_ai.tool.call.id" {
+			toolCallID = kv.Value.AsString()
+			break
 		}
 	}
 
-	// 2. Fallback: Re-parent root 'invoke_agent' spans to their parent if still missing.
-	if !parent.IsValid() && (name == spanInvokeAgent || strings.HasPrefix(name, spanInvokeAgent+":") || strings.HasPrefix(name, spanInvokeAgent+" ")) {
-		// If we still can't find a parent for invoke_agent via ID mapping, 
-		// the context propagation might be completely broken.
+	if manualParentSC, ok := getManualParentContextByToolCallID(toolCallID); ok {
+		return oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+			TraceID:    manualParentSC.TraceID(),
+			SpanID:     sc.SpanID(),
+			TraceFlags: sc.TraceFlags(),
+			TraceState: sc.TraceState(),
+			Remote:     sc.IsRemote(),
+		})
+	}
+
+	// 2. Try global TraceID mapping (for spans in the same trace without their own tool_call_id)
+	if manualTID, ok := getManualTraceID(sc.TraceID()); ok {
+		return oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+			TraceID:    manualTID,
+			SpanID:     sc.SpanID(),
+			TraceFlags: sc.TraceFlags(),
+			TraceState: sc.TraceState(),
+			Remote:     sc.IsRemote(),
+		})
+	}
+
+	// 3. Fallback to Tool SpanID mapping
+	if manualParentSC, ok := getManualParentContextForTool(sc.SpanID()); ok {
+		return oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+			TraceID:    manualParentSC.TraceID(),
+			SpanID:     sc.SpanID(),
+			TraceFlags: sc.TraceFlags(),
+			TraceState: sc.TraceState(),
+			Remote:     sc.IsRemote(),
+		})
+	}
+
+	return sc
+}
+
+func (p *translatedSpan) Parent() oteltrace.SpanContext {
+	parent := p.ReadOnlySpan.Parent()
+	sc := p.ReadOnlySpan.SpanContext()
+
+	// 1. Precise Re-parenting based on internal ParentID mapping
+	if parent.IsValid() {
+		if manualSC, ok := getManualParentContext(parent.SpanID()); ok {
+			return manualSC
+		}
+	}
+
+	// 2. Try ToolCallID mapping (for tool spans that lost parent context)
+	toolCallID := ""
+	for _, kv := range p.ReadOnlySpan.Attributes() {
+		if string(kv.Key) == "gen_ai.tool.call.id" {
+			toolCallID = kv.Value.AsString()
+			break
+		}
+	}
+	if manualParentSC, ok := getManualParentContextByToolCallID(toolCallID); ok {
+		return manualParentSC
+	}
+
+	// 3. Fallback: Re-parent root spans if we have a direct mapping for this span ID.
+	if !parent.IsValid() {
+		if manualSC, ok := getManualParentContextForTool(sc.SpanID()); ok {
+			return manualSC
+		}
 	}
 
 	return parent

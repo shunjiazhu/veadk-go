@@ -35,16 +35,13 @@ import (
 
 	"github.com/volcengine/veadk-go/configs"
 	"github.com/volcengine/veadk-go/log"
-	"github.com/volcengine/veadk-go/observability/exporter"
 )
 
 // NewPlugin creates a new observability plugin for ADK.
 // It returns a *plugin.Plugin that can be registered in launcher.Config or agent.Config.
 func NewPlugin(opts ...Option) *plugin.Plugin {
-	// Ensure observability system is initialized.
-	// This will use default configuration or environment variables.
+	// use global config by default. deep copy to avoid mutating global config.
 	observabilityConfig := configs.GetGlobalConfig().Observability.Clone()
-	// Apply options
 	for _, opt := range opts {
 		opt(observabilityConfig)
 	}
@@ -61,6 +58,7 @@ func NewPlugin(opts ...Option) *plugin.Plugin {
 
 	p.tracer = otel.Tracer(InstrumentationName)
 
+	// no need to check the error as it is always nil.
 	pluginInstance, _ := plugin.New(plugin.Config{
 		Name:                "veadk-observability",
 		BeforeRunCallback:   p.BeforeRun,
@@ -93,42 +91,28 @@ type adkObservabilityPlugin struct {
 }
 
 func (p *adkObservabilityPlugin) isMetricsEnabled() bool {
-	if p.config == nil || p.config.OpenTelemetry == nil {
+	if p.config == nil || p.config.OpenTelemetry == nil || p.config.OpenTelemetry.EnableMetrics == nil {
 		return false
 	}
-
-	if p.config.OpenTelemetry.EnableMetrics != nil {
-		return *p.config.OpenTelemetry.EnableMetrics
-	}
-
-	return false
+	return *p.config.OpenTelemetry.EnableMetrics
 }
 
 // BeforeRun is called before an agent run starts.
 func (p *adkObservabilityPlugin) BeforeRun(ctx agent.InvocationContext) (*genai.Content, error) {
-	// 1. Check if we're already inside an invocation span to avoid duplicates
-	existingSpan := trace.SpanFromContext(context.Context(ctx))
-	if existingSpan.SpanContext().IsValid() && existingSpan.IsRecording() {
-		// If we are already inside an invocation span, we can reuse it
-		// but typically we want the plugin to be self-contained.
-	}
-
-	// 2. Start the 'invocation' span
-	// Align with Python: name is "invocation"
-	// Use SpanKindServer for the root invocation span
+	// 1. Start the 'invocation' span
 	newCtx, span := p.tracer.Start(context.Context(ctx), SpanInvocation, trace.WithSpanKind(trace.SpanKindServer))
 
-	// 3. Store in state for AfterRun and children
+	// [Precision Mapping] Register internal ADK run span ID -> our manual invocation span context.
+	adkSpan := trace.SpanFromContext(context.Context(ctx))
+	if adkSpan.SpanContext().IsValid() {
+		registerRunMapping(adkSpan.SpanContext().SpanID(), span.SpanContext(), span)
+	}
+
+	// 2. Store in state for AfterRun and children
 	_ = ctx.Session().State().Set(stateKeyInvocationSpan, span)
 	_ = ctx.Session().State().Set(stateKeyInvocationCtx, newCtx)
 
-	// 4. Register this span as the root for this TraceID
-	sc := span.SpanContext()
-	if sc.IsValid() {
-		exporter.RegisterInvocationSpan(sc.TraceID(), span)
-	}
-
-	// 5. Set attributes
+	// 3. Set attributes
 	setCommonAttributes(newCtx, span)
 	setWorkflowAttributes(span)
 
@@ -154,14 +138,6 @@ func (p *adkObservabilityPlugin) AfterRun(ctx agent.InvocationContext) {
 	if s, _ := ctx.Session().State().Get(stateKeyInvocationSpan); s != nil {
 		span := s.(trace.Span)
 		if span.IsRecording() {
-			// Clean up from global map
-			sc := span.SpanContext()
-			if sc.IsValid() {
-				exporter.UnregisterInvocationSpan(sc.TraceID())
-				exporter.UnregisterAgentSpanContext(sc.TraceID())
-				exporter.UnregisterLLMSpanContext(sc.TraceID())
-			}
-
 			// Capture final output if available
 			if cached, _ := ctx.Session().State().Get(stateKeyStreamingOutput); cached != nil {
 				if jsonOut, err := json.Marshal(cached); err == nil {
@@ -195,6 +171,19 @@ func (p *adkObservabilityPlugin) AfterRun(ctx agent.InvocationContext) {
 				}
 			}
 
+			// Clean up from global map with delay to allow children to be exported.
+			// Since we have multiple exporters, we wait long enough for all of them to finish.
+			adkSpan := trace.SpanFromContext(context.Context(ctx))
+			if adkSpan.SpanContext().IsValid() {
+				id := adkSpan.SpanContext().SpanID()
+				tid := adkSpan.SpanContext().TraceID()
+				manualID := span.SpanContext().SpanID()
+				time.AfterFunc(10*time.Minute, func() {
+					unregisterRunMapping(id, manualID)
+					unregisterAllForTrace(tid)
+				})
+			}
+
 			span.End()
 		}
 	}
@@ -216,10 +205,11 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 	newCtx, span := p.tracer.Start(parentCtx, SpanCallLLM)
 	_ = ctx.State().Set(stateKeyStreamingSpan, span)
 
-	// Register LLM span context for re-parenting subsequent tools
-	sc := span.SpanContext()
-	if sc.IsValid() {
-		exporter.RegisterLLMSpanContext(sc.TraceID(), sc)
+	// [Precision Mapping] Register internal ADK span ID -> our manual span context.
+	// This ensures subsequent tools are re-parented to the correct LLM call even in parallel runs.
+	adkSpan := trace.SpanFromContext(context.Context(ctx))
+	if adkSpan.SpanContext().IsValid() {
+		registerLLMMapping(adkSpan.SpanContext().SpanID(), span.SpanContext())
 	}
 
 	// Group metadata in a single structure for state storage
@@ -234,7 +224,7 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 	// Link back to the ADK internal span if it's there.
 	// This records the ID of the span started by the ADK framework, which we
 	// often bypass to maintain a cleaner hierarchy in our manual spans.
-	adkSpan := trace.SpanFromContext(context.Context(ctx))
+	adkSpan = trace.SpanFromContext(context.Context(ctx))
 	if adkSpan.SpanContext().IsValid() {
 		span.SetAttributes(attribute.String("adk.internal_span_id", adkSpan.SpanContext().SpanID().String()))
 	}
@@ -357,6 +347,16 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 
 	if resp.UsageMetadata != nil {
 		p.handleUsage(ctx, span, resp, resp.Partial, finalModelName)
+	}
+
+	// [Precision Mapping - ToolCallID] Capture tool calls from response to link future tool spans
+	if resp.Content != nil {
+		for _, part := range resp.Content.Parts {
+			if part.FunctionCall != nil && part.FunctionCall.ID != "" {
+				log.Debug("Registering ToolCallID mapping in AfterModel", "tool_call_id", part.FunctionCall.ID, "parent_llm_span_id", span.SpanContext().SpanID().String())
+				registerToolCallMapping(part.FunctionCall.ID, span.SpanContext())
+			}
+		}
 	}
 
 	if resp.FinishReason != "" {
@@ -491,9 +491,7 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 		p.addChoiceEvents(span, currentAcc)
 	}
 
-	// If this is the final chunk (or non-streaming response), record final metrics
 	if !resp.Partial {
-
 		// Record Operation Duration and Latency
 		if !meta.StartTime.IsZero() {
 			duration := time.Since(meta.StartTime).Seconds()
@@ -780,6 +778,28 @@ func safeMarshal(v any) string {
 	return string(b)
 }
 
+func (p *adkObservabilityPlugin) BeforeTool(ctx tool.Context, tool tool.Tool, args map[string]any) (map[string]any, error) {
+	// Set GenAI standard span attributes early.
+	// Note: We don't register mapping here because logs show span_id is often 0 in ADK context callbacks.
+	// We rely on ToolCallID mapping established in AfterModel.
+	span := trace.SpanFromContext(context.Context(ctx))
+	if span.SpanContext().IsValid() {
+		activeCtx := context.Context(ctx)
+		setCommonAttributes(activeCtx, span)
+		setToolAttributes(span, tool.Name())
+
+		// Capture input arguments early
+		if argsJSON, err := json.Marshal(args); err == nil {
+			span.SetAttributes(attribute.String(AttrGenAIToolInput, string(argsJSON)))
+		}
+	}
+
+	meta := p.getSpanMetadata(ctx.State())
+	meta.StartTime = time.Now()
+	p.storeSpanMetadata(ctx.State(), meta)
+	return nil, nil
+}
+
 // AfterTool is called after a tool is executed.
 func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
 	span := trace.SpanFromContext(context.Context(ctx))
@@ -787,34 +807,30 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 		return nil, nil
 	}
 
-	activeCtx := context.Context(ctx)
-
-	// Set GenAI standard span attributes
-	setCommonAttributes(activeCtx, span)
-	setToolAttributes(span, tool.Name())
-
-	// Enrich standard attributes
+	// Enrich with result attributes
 	argsJSON, _ := json.Marshal(args)
 	resultJSON, _ := json.Marshal(result)
 
-	attrs := []attribute.KeyValue{
-		attribute.String(AttrGenAIToolInput, string(argsJSON)),
-		attribute.String(AttrGenAIToolOutput, string(resultJSON)),
+	if resultJSON != nil {
+		span.SetAttributes(attribute.String(AttrGenAIToolOutput, string(resultJSON)))
 	}
-	span.SetAttributes(attrs...)
+
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+	}
 
 	// Metrics
 	meta := p.getSpanMetadata(ctx.State())
 	if !meta.StartTime.IsZero() {
 		duration := time.Since(meta.StartTime).Seconds()
 		metricAttrs := []attribute.KeyValue{
-			attribute.String("gen_ai_operation_name", tool.Name()),
+			attribute.String(AttrGenAIOperationName, tool.Name()),
 			attribute.String("gen_ai_operation_type", "tool"),
-			attribute.String("gen_ai_system", "veadk"),
+			attribute.String(AttrGenAISystem, "veadk"),
 		}
 		if p.isMetricsEnabled() {
-			RecordOperationDuration(context.Context(ctx), duration, metricAttrs...)
-			RecordAPMPlusSpanLatency(context.Context(ctx), duration, metricAttrs...)
+			RecordOperationDuration(context.Background(), duration, metricAttrs...)
+			RecordAPMPlusSpanLatency(context.Background(), duration, metricAttrs...)
 		}
 
 		// Tool Token Usage (Estimated)
@@ -823,21 +839,14 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 
 		if p.isMetricsEnabled() {
 			if inputChars > 0 {
-				RecordAPMPlusToolTokenUsage(context.Context(ctx), inputChars/4, append(metricAttrs, attribute.String("token_type", "input"))...)
+				RecordAPMPlusToolTokenUsage(context.Background(), inputChars/4, append(metricAttrs, attribute.String("token_type", "input"))...)
 			}
 			if outputChars > 0 {
-				RecordAPMPlusToolTokenUsage(context.Context(ctx), outputChars/4, append(metricAttrs, attribute.String("token_type", "output"))...)
+				RecordAPMPlusToolTokenUsage(context.Background(), outputChars/4, append(metricAttrs, attribute.String("token_type", "output"))...)
 			}
 		}
 	}
 
-	return nil, nil
-}
-
-func (p *adkObservabilityPlugin) BeforeTool(ctx tool.Context, tool tool.Tool, args map[string]any) (map[string]any, error) {
-	meta := p.getSpanMetadata(ctx.State())
-	meta.StartTime = time.Now()
-	p.storeSpanMetadata(ctx.State(), meta)
 	return nil, nil
 }
 
@@ -860,16 +869,15 @@ func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.
 	spanName := SpanInvokeAgent + " " + agentName
 	newCtx, span := p.tracer.Start(parentCtx, spanName)
 
+	// [Precision Mapping] Register internal ADK agent span ID -> our manual agent span context.
+	adkSpan := trace.SpanFromContext(context.Context(ctx))
+	if adkSpan.SpanContext().IsValid() {
+		registerAgentMapping(adkSpan.SpanContext().SpanID(), span.SpanContext())
+	}
+
 	// 3. Store in state for AfterAgent and children
 	_ = ctx.State().Set(stateKeyAgentSpan, span)
 	_ = ctx.State().Set(stateKeyAgentCtx, newCtx)
-
-	// 3. Register this span as the current parent for ADK internal spans in this trace.
-	// This is the key to fixing hierarchy perfectly.
-	sc := span.SpanContext()
-	if sc.IsValid() {
-		exporter.RegisterAgentSpanContext(sc.TraceID(), sc)
-	}
 
 	// 4. Set attributes
 	setCommonAttributes(newCtx, span)
@@ -885,11 +893,6 @@ func (p *adkObservabilityPlugin) AfterAgent(ctx agent.CallbackContext) (*genai.C
 	if s, _ := ctx.State().Get(stateKeyAgentSpan); s != nil {
 		span := s.(trace.Span)
 		if span.IsRecording() {
-			// Clean up from global map using the actual span's TraceID
-			sc := span.SpanContext()
-			if sc.IsValid() {
-				exporter.UnregisterAgentSpanContext(sc.TraceID())
-			}
 			span.End()
 		}
 	}

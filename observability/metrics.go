@@ -70,9 +70,9 @@ var (
 	apmPlusToolTokenUsageHistograms []metric.Float64Histogram
 )
 
-// RegisterLocalMetrics initializes the metrics system with a local isolated MeterProvider.
+// registerLocalMetrics initializes the metrics system with a local isolated MeterProvider.
 // It does NOT overwrite the global OTel MeterProvider.
-func RegisterLocalMetrics(readers []sdkmetric.Reader) {
+func registerLocalMetrics(readers []sdkmetric.Reader) {
 	localOnce.Do(func() {
 		options := []sdkmetric.Option{}
 		for _, r := range readers {
@@ -85,9 +85,9 @@ func RegisterLocalMetrics(readers []sdkmetric.Reader) {
 	})
 }
 
-// RegisterGlobalMetrics configures the global OpenTelemetry MeterProvider with the provided readers.
+// registerGlobalMetrics configures the global OpenTelemetry MeterProvider with the provided readers.
 // This is optional and used when you want unrelated OTel measurements to also be exported.
-func RegisterGlobalMetrics(readers []sdkmetric.Reader) {
+func registerGlobalMetrics(readers []sdkmetric.Reader) {
 	globalOnce.Do(func() {
 		options := []sdkmetric.Option{}
 		for _, r := range readers {
