@@ -66,16 +66,17 @@ func Init(ctx context.Context, cfg *configs.ObservabilityConfig) error {
 
 // Shutdown shuts down the observability system, flushing all spans and metrics.
 func Shutdown(ctx context.Context) error {
+	log.Info("Shut down TracerProvider and MeterProvider")
 	var errs []error
 
 	// 0. End all active root invocation spans to ensure they are recorded and flushed.
 	// This handles cases like Ctrl+C or premature exit where defer blocks might not run.
 	GetRegistry().EndAllInvocationSpans()
+	GetRegistry().Shutdown()
 
 	// 1. Shutdown TracerProvider
 	tp := otel.GetTracerProvider()
 	if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {
-		log.Info("Shutting down TracerProvider and flushing spans")
 		if err := sdkTP.ForceFlush(ctx); err != nil {
 			log.Error("Failed to force flush TracerProvider", "err", err)
 			errs = append(errs, err)
@@ -253,8 +254,7 @@ func handleSignals(ctx context.Context) {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		sig := <-sigChan
-		log.Info("Received signal, performing graceful shutdown", "signal", sig)
+		<-sigChan
 
 		// Trigger shutdown which will flush all processors (including BatchSpanProcessor)
 		_ = Shutdown(ctx)

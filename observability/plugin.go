@@ -463,6 +463,8 @@ func (p *adkObservabilityPlugin) recordTimeToFirstToken(ctx agent.CallbackContex
 				}
 				RecordStreamingTimeToFirstToken(context.Context(ctx), latency, metricAttrs...)
 			}
+		} else {
+			log.Warn("didn't find the start time of span", "meta", meta)
 		}
 	}
 }
@@ -912,6 +914,9 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 	span := trace.SpanFromContext(context.Context(ctx))
 	toolCallID := ctx.FunctionCallID()
 	log.Debug("AfterTool: get a span from context", "toolCallID", toolCallID, "span", span.SpanContext(), "isRecording", span.IsRecording())
+
+	var outputJSONLen int64
+
 	if span.IsRecording() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
@@ -925,6 +930,7 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 		}
 		if jsonBytes, err := json.Marshal(outputData); err == nil {
 			val := string(jsonBytes)
+			outputJSONLen = int64(len(val))
 			span.SetAttributes(
 				attribute.String(AttrGenAIToolOutput, val),
 				attribute.String(AttrGenAIOutput, val),
@@ -947,13 +953,25 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 			RecordAPMPlusSpanLatency(context.Background(), duration, metricAttrs...)
 		}
 
-		// Tool Token Usage (Estimated)
-		argsJSON, _ := json.Marshal(args)
-		resultJSON, _ := json.Marshal(result)
-		inputChars := int64(len(string(argsJSON)))
-		outputChars := int64(len(string(resultJSON)))
-
 		if p.isMetricsEnabled() {
+			// Tool Token Usage (Estimated)
+			// Input Chars: Try to get from State (calculated in BeforeTool)
+			var inputChars int64
+			// Fallback: Marshal args if state missing
+			if argsJSON, err := json.Marshal(args); err == nil {
+				inputChars = int64(len(argsJSON))
+			}
+
+			// Output Chars: Use calculated outputJSONLen or fallback to result marshal
+			var outputChars int64
+			if outputJSONLen > 0 {
+				outputChars = outputJSONLen
+			} else {
+				if resultJSON, err := json.Marshal(result); err == nil {
+					outputChars = int64(len(resultJSON))
+				}
+			}
+
 			if inputChars > 0 {
 				RecordAPMPlusToolTokenUsage(context.Background(), inputChars/4, append(metricAttrs, attribute.String("token_type", "input"))...)
 			}

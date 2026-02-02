@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/volcengine/veadk-go/log"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -37,6 +38,19 @@ type TraceRegistry struct {
 	// adkTraceToVeadkTraceMap tracks InternalTraceID -> Associated Resources for cleanup.
 	resourcesMu             sync.RWMutex
 	adkTraceToVeadkTraceMap map[trace.TraceID]*traceInfos
+
+	// cleanupQueue receives cleanup requests
+	cleanupQueue chan cleanupRequest
+
+	// shutdownChan signals the cleanup loop to exit
+	shutdownChan chan struct{}
+}
+
+type cleanupRequest struct {
+	adkTraceID    trace.TraceID
+	internalRunID trace.SpanID
+	veadkSpanID   trace.SpanID
+	deadline      time.Time
 }
 
 type toolCallInfo struct {
@@ -52,14 +66,71 @@ type traceInfos struct {
 
 var (
 	// globalRegistry is the singleton instance of TraceRegistry.
-	globalRegistry = &TraceRegistry{
-		adkTraceToVeadkTraceMap: make(map[trace.TraceID]*traceInfos),
-	}
+	globalRegistry *TraceRegistry
+	once           sync.Once
 )
 
 // GetRegistry returns the global TraceRegistry.
 func GetRegistry() *TraceRegistry {
+	once.Do(func() {
+		globalRegistry = &TraceRegistry{
+			adkTraceToVeadkTraceMap: make(map[trace.TraceID]*traceInfos),
+			cleanupQueue:            make(chan cleanupRequest, 512),
+			shutdownChan:            make(chan struct{}),
+		}
+		go globalRegistry.cleanupLoop()
+	})
 	return globalRegistry
+}
+
+func (r *TraceRegistry) Shutdown() {
+	select {
+	case <-r.shutdownChan:
+		// Already closed
+	default:
+		close(r.shutdownChan)
+	}
+}
+
+func (r *TraceRegistry) cleanupLoop() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	// Use a slice to store pending requests
+	var pendingRequests []cleanupRequest
+
+	for {
+		select {
+		case <-r.shutdownChan:
+			return
+		case req := <-r.cleanupQueue:
+			pendingRequests = append(pendingRequests, req)
+		case <-ticker.C:
+			now := time.Now()
+			activeRequests := pendingRequests[:0]
+			for _, req := range pendingRequests {
+				if now.After(req.deadline) {
+					// Perform cleanup
+					r.UnregisterInvocationMapping(req.internalRunID, req.veadkSpanID)
+
+					r.resourcesMu.Lock()
+					if res, ok := r.adkTraceToVeadkTraceMap[req.adkTraceID]; ok {
+						for _, sid := range res.spanIDs {
+							r.adkSpanMap.Delete(sid)
+						}
+						for _, tcid := range res.toolCallIDs {
+							r.toolCallMap.Delete(tcid)
+						}
+						delete(r.adkTraceToVeadkTraceMap, req.adkTraceID)
+					}
+					r.resourcesMu.Unlock()
+				} else {
+					activeRequests = append(activeRequests, req)
+				}
+			}
+			pendingRequests = activeRequests
+		}
+	}
 }
 
 func (r *TraceRegistry) getOrCreateTraceInfos(adkTraceID trace.TraceID) *traceInfos {
@@ -201,8 +272,8 @@ func (r *TraceRegistry) GetVeadkTraceID(adkTraceID trace.TraceID) (trace.TraceID
 	return trace.TraceID{}, false
 }
 
-// UnregisterRunMapping removes run-related mappings.
-func (r *TraceRegistry) UnregisterRunMapping(adkSpanID trace.SpanID, veadkSpanID trace.SpanID) {
+// UnregisterInvocationMapping removes run-related mappings.
+func (r *TraceRegistry) UnregisterInvocationMapping(adkSpanID trace.SpanID, veadkSpanID trace.SpanID) {
 	r.adkSpanMap.Delete(adkSpanID)
 	r.activeInvocationSpans.Delete(veadkSpanID)
 }
@@ -210,25 +281,16 @@ func (r *TraceRegistry) UnregisterRunMapping(adkSpanID trace.SpanID, veadkSpanID
 // ScheduleCleanup schedules cleanup of all mappings related to an internal TraceID.
 // This is typically called when the trace is considered complete.
 func (r *TraceRegistry) ScheduleCleanup(adkTraceID trace.TraceID, internalRunID trace.SpanID, veadkSpanID trace.SpanID) {
-	time.AfterFunc(5*time.Minute, func() {
-		r.UnregisterRunMapping(internalRunID, veadkSpanID)
-
-		r.resourcesMu.Lock()
-		defer r.resourcesMu.Unlock()
-
-		if res, ok := r.adkTraceToVeadkTraceMap[adkTraceID]; ok {
-			// Clean up all spans (merged map makes this simpler)
-			for _, sid := range res.spanIDs {
-				r.adkSpanMap.Delete(sid)
-			}
-			// Clean up tool calls
-			for _, tcid := range res.toolCallIDs {
-				r.toolCallMap.Delete(tcid)
-			}
-			// Clean up trace map
-			delete(r.adkTraceToVeadkTraceMap, adkTraceID)
-		}
-	})
+	select {
+	case r.cleanupQueue <- cleanupRequest{
+		adkTraceID:    adkTraceID,
+		internalRunID: internalRunID,
+		veadkSpanID:   veadkSpanID,
+		deadline:      time.Now().Add(5 * time.Minute),
+	}:
+	default:
+		log.Warn("trace cleanup queue is full")
+	}
 }
 
 // EndAllInvocationSpans ends all currently active invocation spans.
