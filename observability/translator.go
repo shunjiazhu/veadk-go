@@ -28,19 +28,21 @@ import (
 var (
 	spanInvokeAgent = "invoke_agent"
 
-	// ADKAttributeKeyMap maps ADK internal attribute keys to standard GenAI keys.
-	ADKAttributeKeyMap = map[string]string{
-		"gcp.vertex.agent.llm_request":  "input.value",
-		"gcp.vertex.agent.llm_response": "output.value",
-		"gcp.vertex.agent.session_id":   "gen_ai.session.id",
-		"gcp.vertex.agent.model":        "gen_ai.response.model",
-		"gcp.vertex.agent.usage":        "gen_ai.usage",
-	}
+	gcpVertexAgentLLMRequestName   = "gcp.vertex.agent.llm_request"
+	gcpVertexAgentToolCallArgsName = "gcp.vertex.agent.tool_call_args"
+	gcpVertexAgentEventID          = "gcp.vertex.agent.event_id"
+	gcpVertexAgentToolResponseName = "gcp.vertex.agent.tool_response"
+	gcpVertexAgentLLMResponseName  = "gcp.vertex.agent.llm_response"
+	gcpVertexAgentInvocationID     = "gcp.vertex.agent.invocation_id"
+	gcpVertexAgentSessionID        = "gcp.vertex.agent.session_id"
 
-	// ADKTargetKeyAliases maps standard keys to their legacy or platform-specific aliases.
-	ADKTargetKeyAliases = map[string][]string{
-		"gen_ai.response.model": {"gcp.vertex.agent.model"},
-		"gen_ai.usage":          {"gcp.vertex.agent.usage"},
+	ADKAttributeKeyMap = map[string]string{
+		gcpVertexAgentLLMRequestName:   AttrInputValue,
+		gcpVertexAgentLLMResponseName:  AttrOutputValue,
+		gcpVertexAgentToolCallArgsName: AttrGenAIToolInput,
+		gcpVertexAgentToolResponseName: AttrGenAIToolOutput,
+		gcpVertexAgentInvocationID:     AttrGenAIInvocationId,
+		gcpVertexAgentSessionID:        AttrGenAISessionId,
 	}
 )
 
@@ -56,13 +58,15 @@ func isMatch(span trace.ReadOnlySpan) bool {
 	return true
 }
 
-// ADKTranslatedExporter wraps a SpanExporter and remaps ADK attributes to standard fields.
-type ADKTranslatedExporter struct {
+// VeADKTranslatedExporter wraps a SpanExporter and remaps ADK attributes to standard fields.
+type VeADKTranslatedExporter struct {
 	trace.SpanExporter
 }
 
-func (e *ADKTranslatedExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
+func (e *VeADKTranslatedExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
 	translated := make([]trace.ReadOnlySpan, 0, len(spans))
+	registry := GetRegistry()
+
 	for _, s := range spans {
 		if !isMatch(s) {
 			continue
@@ -74,37 +78,24 @@ func (e *ADKTranslatedExporter) ExportSpans(ctx context.Context, spans []trace.R
 		// 1. Logic stitching via ToolCallID
 		toolCallID := ""
 		for _, kv := range s.Attributes() {
-			if string(kv.Key) == "gen_ai.tool.call.id" {
+			if string(kv.Key) == AttrGenAIToolCallID {
 				toolCallID = kv.Value.AsString()
 				break
 			}
 		}
 
 		if toolCallID != "" {
-			if manualParentSC, ok := getManualParentContextByToolCallID(toolCallID); ok {
+			if veadkParentSC, ok := registry.GetVeadkParentContextByToolCallID(toolCallID); ok {
 				// We found a match! Record this TraceID mapping to align other spans in the same trace (like merged spans)
-				registerTraceMapping(s.SpanContext().TraceID(), manualParentSC.TraceID())
+				registry.RegisterTraceMapping(s.SpanContext().TraceID(), veadkParentSC.TraceID())
 				log.Debug("Matched tool via ToolCallID, established TraceID mapping",
 					"tool_call_id", toolCallID,
-					"internal_trace_id", s.SpanContext().TraceID().String(),
-					"manual_trace_id", manualParentSC.TraceID().String(),
+					"adk_trace_id", s.SpanContext().TraceID().String(),
+					"veadk_trace_id", veadkParentSC.TraceID().String(),
 				)
 			}
 		}
 
-		// Debug logging for execute_tool
-		if strings.Contains(s.Name(), "execute_tool") {
-			sc := ts.SpanContext()
-			parent := ts.Parent()
-			log.Debug("Translating tool span",
-				"name", s.Name(),
-				"orig_span_id", s.SpanContext().SpanID().String(),
-				"orig_trace_id", s.SpanContext().TraceID().String(),
-				"new_trace_id", sc.TraceID().String(),
-				"orig_parent_id", s.Parent().SpanID().String(),
-				"new_parent_id", parent.SpanID().String(),
-			)
-		}
 	}
 
 	if len(translated) == 0 {
@@ -121,13 +112,38 @@ type translatedSpan struct {
 
 func (p *translatedSpan) Attributes() []attribute.KeyValue {
 	attrs := p.ReadOnlySpan.Attributes()
-	newAttrs := make([]attribute.KeyValue, 0, len(attrs))
+	newAttrs := make([]attribute.KeyValue, 0, len(attrs)+5) // Pre-allocate with some extra space
 
-	hasStandardUsage := false
+	// Create a map to track existing standard keys to avoid duplicates/overwrites
+	existingKeys := make(map[string]bool)
+	toolCallID := ""
+
+	// First pass: scan for existing keys and ToolCallID
 	for _, kv := range attrs {
-		if kv.Key == "gen_ai.usage" {
-			hasStandardUsage = true
-			break
+		existingKeys[string(kv.Key)] = true
+		if kv.Key == attribute.Key(AttrGenAIToolCallID) {
+			toolCallID = kv.Value.AsString()
+		}
+	}
+
+	// Dynamic Injection: Tool Input/Output from Registry
+	if toolCallID != "" {
+		registry := GetRegistry()
+		// Inject Input
+		if input, ok := registry.GetToolInput(toolCallID); ok {
+			newAttrs = append(newAttrs,
+				attribute.String(AttrGenAIToolInput, input),
+				attribute.String(AttrCozeloopInput, input),
+				attribute.String(AttrGenAIInput, input),
+			)
+		}
+		// Inject Output
+		if output, ok := registry.GetToolOutput(toolCallID); ok {
+			newAttrs = append(newAttrs,
+				attribute.String(AttrGenAIToolOutput, output),
+				attribute.String(AttrCozeloopOutput, output),
+				attribute.String(AttrGenAIOutput, output),
+			)
 		}
 	}
 
@@ -138,17 +154,8 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 		if strings.HasPrefix(key, "gcp.vertex.agent.") {
 			targetKey, ok := ADKAttributeKeyMap[key]
 			if ok {
-				// Avoid duplicates if Processor already mapped it
-				alreadyMapped := false
-				if !hasStandardUsage || targetKey != "gen_ai.usage" {
-					for _, na := range newAttrs {
-						if string(na.Key) == targetKey {
-							alreadyMapped = true
-							break
-						}
-					}
-				}
-				if !alreadyMapped {
+				// Only add mapped key if the target key doesn't already exist in the span
+				if !existingKeys[targetKey] {
 					newAttrs = append(newAttrs, attribute.KeyValue{Key: attribute.Key(targetKey), Value: kv.Value})
 				}
 			}
@@ -156,8 +163,8 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 		}
 
 		// 2. Patch gen_ai.system if needed
-		if key == "gen_ai.system" && kv.Value.AsString() == "gcp.vertex.agent" {
-			kv = attribute.String("gen_ai.system", "veadk")
+		if key == AttrGenAISystem && kv.Value.AsString() == "gcp.vertex.agent" {
+			kv = attribute.String(AttrGenAISystem, "volcengine")
 		}
 
 		newAttrs = append(newAttrs, kv)
@@ -168,20 +175,19 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 
 func (p *translatedSpan) SpanContext() oteltrace.SpanContext {
 	sc := p.ReadOnlySpan.SpanContext()
+	registry := GetRegistry()
 
-	// [Thin Layer] TraceID Correction.
-	// 1. Try ToolCallID mapping (most precise)
 	toolCallID := ""
 	for _, kv := range p.ReadOnlySpan.Attributes() {
-		if string(kv.Key) == "gen_ai.tool.call.id" {
+		if string(kv.Key) == AttrGenAIToolCallID {
 			toolCallID = kv.Value.AsString()
 			break
 		}
 	}
 
-	if manualParentSC, ok := getManualParentContextByToolCallID(toolCallID); ok {
+	if veadkParentSC, ok := registry.GetVeadkParentContextByToolCallID(toolCallID); ok {
 		return oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
-			TraceID:    manualParentSC.TraceID(),
+			TraceID:    veadkParentSC.TraceID(),
 			SpanID:     sc.SpanID(),
 			TraceFlags: sc.TraceFlags(),
 			TraceState: sc.TraceState(),
@@ -190,9 +196,9 @@ func (p *translatedSpan) SpanContext() oteltrace.SpanContext {
 	}
 
 	// 2. Try global TraceID mapping (for spans in the same trace without their own tool_call_id)
-	if manualTID, ok := getManualTraceID(sc.TraceID()); ok {
+	if veadkParentSC, ok := registry.GetVeadkTraceID(sc.TraceID()); ok {
 		return oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
-			TraceID:    manualTID,
+			TraceID:    veadkParentSC,
 			SpanID:     sc.SpanID(),
 			TraceFlags: sc.TraceFlags(),
 			TraceState: sc.TraceState(),
@@ -201,9 +207,9 @@ func (p *translatedSpan) SpanContext() oteltrace.SpanContext {
 	}
 
 	// 3. Fallback to Tool SpanID mapping
-	if manualParentSC, ok := getManualParentContextForTool(sc.SpanID()); ok {
+	if veadkParentSC, ok := registry.GetVeadkSpanContext(sc.SpanID()); ok {
 		return oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
-			TraceID:    manualParentSC.TraceID(),
+			TraceID:    veadkParentSC.TraceID(),
 			SpanID:     sc.SpanID(),
 			TraceFlags: sc.TraceFlags(),
 			TraceState: sc.TraceState(),
@@ -217,29 +223,31 @@ func (p *translatedSpan) SpanContext() oteltrace.SpanContext {
 func (p *translatedSpan) Parent() oteltrace.SpanContext {
 	parent := p.ReadOnlySpan.Parent()
 	sc := p.ReadOnlySpan.SpanContext()
+	registry := GetRegistry()
 
 	// 1. Precise Re-parenting based on internal ParentID mapping
 	if parent.IsValid() {
-		if manualSC, ok := getManualParentContext(parent.SpanID()); ok {
-			return manualSC
+		if veadkSC, ok := registry.GetVeadkSpanContext(parent.SpanID()); ok {
+			return veadkSC
 		}
 	}
 
 	// 2. Try ToolCallID mapping (for tool spans that lost parent context)
 	toolCallID := ""
 	for _, kv := range p.ReadOnlySpan.Attributes() {
-		if string(kv.Key) == "gen_ai.tool.call.id" {
+		if string(kv.Key) == AttrGenAIToolCallID {
 			toolCallID = kv.Value.AsString()
 			break
 		}
 	}
-	if manualParentSC, ok := getManualParentContextByToolCallID(toolCallID); ok {
+
+	if manualParentSC, ok := registry.GetVeadkParentContextByToolCallID(toolCallID); ok {
 		return manualParentSC
 	}
 
 	// 3. Fallback: Re-parent root spans if we have a direct mapping for this span ID.
 	if !parent.IsValid() {
-		if manualSC, ok := getManualParentContextForTool(sc.SpanID()); ok {
+		if manualSC, ok := registry.GetVeadkSpanContext(sc.SpanID()); ok {
 			return manualSC
 		}
 	}
@@ -253,6 +261,7 @@ func (p *translatedSpan) InstrumentationScope() instrumentation.Scope {
 	if scope.Name == "gcp.vertex.agent" || scope.Name == "veadk" || scope.Name == "github.com/volcengine/veadk-go" {
 		scope.Name = "openinference.instrumentation.veadk"
 	}
+	scope.Version = Version
 	return scope
 }
 

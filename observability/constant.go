@@ -139,8 +139,8 @@ const (
 	AttrGenAIResponsePromptTokenCount      = "gen_ai.response.prompt_token_count"
 	AttrGenAIResponseCandidatesTokenCount  = "gen_ai.response.candidates_token_count"
 
-	AttrGenAIInputValue  = "input.value"
-	AttrGenAIOutputValue = "output.value"
+	AttrInputValue  = "input.value"
+	AttrOutputValue = "output.value"
 )
 
 // Event names
@@ -156,6 +156,7 @@ const (
 	AttrGenAIToolInput     = "gen_ai.tool.input"
 	AttrGenAIToolOutput    = "gen_ai.tool.output"
 	AttrGenAISpanKind      = "gen_ai.span.kind"
+	AttrGenAIToolCallID    = "gen_ai.tool.call.id"
 
 	// Platform specific
 	AttrCozeloopInput  = "cozeloop.input"

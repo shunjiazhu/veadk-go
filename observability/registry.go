@@ -16,201 +16,276 @@ package observability
 
 import (
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel/trace"
 )
 
+// TraceRegistry manages the mapping between ADK-go's spans and VeADK spans.
+// It ensures thread-safe access and proper cleanup of resources.
+type TraceRegistry struct {
+	// adkSpanMap tracks google's adk SpanID (Run/Agent/LLM/Tool) -> VeADK SpanContext
+	adkSpanMap sync.Map
+
+	// toolCallMap tracks ToolCallID (string) -> *toolCallInfo
+	// Consolidates: toolCallToVeadkLLMMap, toolInputs, toolOutputs
+	toolCallMap sync.Map
+
+	// activeInvocationSpans tracks active VeADK invocation spans for shutdown flushing.
+	activeInvocationSpans sync.Map
+
+	// adkTraceToVeadkTraceMap tracks InternalTraceID -> Associated Resources for cleanup.
+	resourcesMu             sync.RWMutex
+	adkTraceToVeadkTraceMap map[trace.TraceID]*traceInfos
+}
+
+type toolCallInfo struct {
+	mu       sync.RWMutex
+	parentSC trace.SpanContext
+	input    string
+	output   string
+}
+
+type traceInfos struct {
+	veadkTraceID trace.TraceID
+	spanIDs      []trace.SpanID
+	toolCallIDs  []string
+}
+
 var (
-	registryMutex sync.RWMutex
-
-	// [Thin Layer] ID Mappings.
-	// We map ADK internal SpanIDs to our manual plugin SpanContexts.
-	// This allows precise re-parenting regardless of TraceID collisions or nesting.
-
-	// adkToVeadkInvocationMap tracks InternalRunID -> ManualInvocationSC
-	adkToVeadkInvocationMap = make(map[trace.SpanID]trace.SpanContext)
-
-	// adkToVeadkInvocateAgentMap tracks InternalAgentID -> ManualAgentSC
-	adkToVeadkInvocateAgentMap = make(map[trace.SpanID]trace.SpanContext)
-
-	// adkToVeadkLLMMap tracks InternalLLMID -> ManualLLMSC
-	adkToVeadkLLMMap = make(map[trace.SpanID]trace.SpanContext)
-
-	// toolToVeadkLLMMap tracks ToolSpanID -> ManualLLMSC.
-	// This is used when ADK starts tool spans as roots (missing parent context).
-	toolToVeadkLLMMap = make(map[trace.SpanID]trace.SpanContext)
-
-	// toolCallToVeadkLLMMap tracks ToolCallID (string) -> ManualLLMSC.
-	// This is the most reliable way to link tool spans when context is completely lost.
-	toolCallToVeadkLLMMap = make(map[string]trace.SpanContext)
-
-	// adkTraceToVeadkTraceMap tracks InternalTraceID -> ManualTraceID.
-	// Once a single span in a trace is matched (e.g. via ToolCallID), we can align the entire trace.
-	adkTraceToVeadkTraceMap = make(map[trace.TraceID]trace.TraceID)
-
-	// activeInvocationSpans tracks active manual invocation spans for shutdown flushing.
-	activeInvocationSpans = make(map[trace.SpanID]trace.Span)
+	// globalRegistry is the singleton instance of TraceRegistry.
+	globalRegistry = &TraceRegistry{
+		adkTraceToVeadkTraceMap: make(map[trace.TraceID]*traceInfos),
+	}
 )
 
-// registerRunMapping links ADK's internal run span to our manual invocation span.
-func registerRunMapping(internalID trace.SpanID, manualSC trace.SpanContext, manualSpan trace.Span) {
-	if !internalID.IsValid() || !manualSC.IsValid() {
+// GetRegistry returns the global TraceRegistry.
+func GetRegistry() *TraceRegistry {
+	return globalRegistry
+}
+
+func (r *TraceRegistry) getOrCreateTraceInfos(adkTraceID trace.TraceID) *traceInfos {
+	r.resourcesMu.Lock()
+	defer r.resourcesMu.Unlock()
+
+	if res, ok := r.adkTraceToVeadkTraceMap[adkTraceID]; ok {
+		return res
+	}
+	res := &traceInfos{}
+	r.adkTraceToVeadkTraceMap[adkTraceID] = res
+	return res
+}
+
+// RegisterRunMapping links ADK's internal run span to our veadk invocation span.
+func (r *TraceRegistry) RegisterRunMapping(adkSpanID trace.SpanID, adkTraceID trace.TraceID, veadkSC trace.SpanContext, veadkSpan trace.Span) {
+	if !adkSpanID.IsValid() || !veadkSC.IsValid() {
 		return
 	}
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	adkToVeadkInvocationMap[internalID] = manualSC
-	activeInvocationSpans[manualSC.SpanID()] = manualSpan
+	r.adkSpanMap.Store(adkSpanID, veadkSC)
+	r.activeInvocationSpans.Store(veadkSC.SpanID(), veadkSpan)
+
+	if adkTraceID.IsValid() {
+		res := r.getOrCreateTraceInfos(adkTraceID)
+		r.resourcesMu.Lock()
+		res.spanIDs = append(res.spanIDs, adkSpanID)
+		res.veadkTraceID = veadkSC.TraceID()
+		r.resourcesMu.Unlock()
+	}
 }
 
-// unregisterRunMapping removes run-related mappings.
-func unregisterRunMapping(internalID trace.SpanID, manualSpanID trace.SpanID) {
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	delete(adkToVeadkInvocationMap, internalID)
-	delete(activeInvocationSpans, manualSpanID)
-}
-
-// registerAgentMapping links ADK's internal agent span to our manual agent span.
-func registerAgentMapping(internalID trace.SpanID, manualSC trace.SpanContext) {
-	if !internalID.IsValid() || !manualSC.IsValid() {
+// RegisterAgentMapping links ADK's internal agent span to our veadk agent span.
+func (r *TraceRegistry) RegisterAgentMapping(adkSpanID trace.SpanID, adkTraceID trace.TraceID, veadkSC trace.SpanContext) {
+	if !adkSpanID.IsValid() || !veadkSC.IsValid() {
 		return
 	}
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	adkToVeadkInvocateAgentMap[internalID] = manualSC
+	r.adkSpanMap.Store(adkSpanID, veadkSC)
+
+	if adkTraceID.IsValid() {
+		res := r.getOrCreateTraceInfos(adkTraceID)
+		r.resourcesMu.Lock()
+		res.spanIDs = append(res.spanIDs, adkSpanID)
+		r.resourcesMu.Unlock()
+	}
 }
 
-// unregisterAgentMapping removes agent mapping.
-func unregisterAgentMapping(internalID trace.SpanID) {
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	delete(adkToVeadkInvocateAgentMap, internalID)
-}
-
-// registerLLMMapping links ADK's internal LLM span to our manual LLM span.
-func registerLLMMapping(internalID trace.SpanID, manualSC trace.SpanContext) {
-	if !internalID.IsValid() || !manualSC.IsValid() {
+// RegisterLLMMapping links ADK's internal LLM span to our veadk LLM span.
+func (r *TraceRegistry) RegisterLLMMapping(adkSpanID trace.SpanID, adkTraceID trace.TraceID, veadkSC trace.SpanContext) {
+	if !adkSpanID.IsValid() || !veadkSC.IsValid() {
 		return
 	}
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	adkToVeadkLLMMap[internalID] = manualSC
+	r.adkSpanMap.Store(adkSpanID, veadkSC)
+
+	if adkTraceID.IsValid() {
+		res := r.getOrCreateTraceInfos(adkTraceID)
+		r.resourcesMu.Lock()
+		res.spanIDs = append(res.spanIDs, adkSpanID)
+		r.resourcesMu.Unlock()
+	}
 }
 
-// unregisterLLMMapping removes LLM mapping.
-func unregisterLLMMapping(internalID trace.SpanID) {
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	delete(adkToVeadkLLMMap, internalID)
-}
-
-// registerToolMapping links a tool span (started by ADK) to its manual parent (LLM call).
-func registerToolMapping(toolSpanID trace.SpanID, manualParentSC trace.SpanContext) {
-	if !toolSpanID.IsValid() || !manualParentSC.IsValid() {
+// RegisterToolMapping links a tool span (started by ADK) to its veadk parent (LLM call).
+func (r *TraceRegistry) RegisterToolMapping(toolSpanID trace.SpanID, veadkParentSC trace.SpanContext) {
+	if !toolSpanID.IsValid() || !veadkParentSC.IsValid() {
 		return
 	}
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	toolToVeadkLLMMap[toolSpanID] = manualParentSC
+	r.adkSpanMap.Store(toolSpanID, veadkParentSC)
 }
 
-// unregisterToolMapping removes tool mapping.
-func unregisterToolMapping(toolSpanID trace.SpanID) {
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	delete(toolToVeadkLLMMap, toolSpanID)
+func (r *TraceRegistry) getOrCreateToolCallInfo(toolCallID string) *toolCallInfo {
+	val, loaded := r.toolCallMap.LoadOrStore(toolCallID, &toolCallInfo{})
+	if !loaded {
+		// New entry
+	}
+	return val.(*toolCallInfo)
 }
 
-// registerToolCallMapping links a logical tool call ID to its parent LLM span context.
-func registerToolCallMapping(toolCallID string, manualParentSC trace.SpanContext) {
-	if toolCallID == "" || !manualParentSC.IsValid() {
+// RegisterToolCallMapping links a logical tool call ID to its parent LLM span context.
+func (r *TraceRegistry) RegisterToolCallMapping(toolCallID string, adkTraceID trace.TraceID, veadkParentSC trace.SpanContext) {
+	if toolCallID == "" || !veadkParentSC.IsValid() {
 		return
 	}
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	toolCallToVeadkLLMMap[toolCallID] = manualParentSC
+	info := r.getOrCreateToolCallInfo(toolCallID)
+	info.mu.Lock()
+	info.parentSC = veadkParentSC
+	info.mu.Unlock()
+
+	if adkTraceID.IsValid() {
+		res := r.getOrCreateTraceInfos(adkTraceID)
+		r.resourcesMu.Lock()
+		res.toolCallIDs = append(res.toolCallIDs, toolCallID)
+		r.resourcesMu.Unlock()
+	}
 }
 
-// unregisterToolCallMapping removes tool call mapping.
-func unregisterToolCallMapping(toolCallID string) {
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	delete(toolCallToVeadkLLMMap, toolCallID)
+// RegisterToolInput stores the input arguments for a tool call.
+func (r *TraceRegistry) RegisterToolInput(toolCallID string, input string) {
+	if toolCallID == "" {
+		return
+	}
+	info := r.getOrCreateToolCallInfo(toolCallID)
+	info.mu.Lock()
+	info.input = input
+	info.mu.Unlock()
 }
 
-// getManualParentContext finds the manual replacement for an internal parent span ID.
-func getManualParentContext(internalParentID trace.SpanID) (trace.SpanContext, bool) {
-	registryMutex.RLock()
-	defer registryMutex.RUnlock()
+// RegisterToolOutput stores the output result for a tool call.
+func (r *TraceRegistry) RegisterToolOutput(toolCallID string, output string) {
+	if toolCallID == "" {
+		return
+	}
+	info := r.getOrCreateToolCallInfo(toolCallID)
+	info.mu.Lock()
+	info.output = output
+	info.mu.Unlock()
+}
 
-	// Check LLM mappings (for tools that have a valid internal parent)
-	if sc, ok := adkToVeadkLLMMap[internalParentID]; ok {
-		return sc, true
+// RegisterTraceMapping records a mapping from an internal adk TraceID to a veadk TraceID.
+func (r *TraceRegistry) RegisterTraceMapping(adkTraceID trace.TraceID, veadkTraceID trace.TraceID) {
+	if !adkTraceID.IsValid() || !veadkTraceID.IsValid() {
+		return
 	}
-	// Check Agent mappings (for LLM calls)
-	if sc, ok := adkToVeadkInvocateAgentMap[internalParentID]; ok {
-		return sc, true
-	}
-	// Check Run mappings (for Agent calls)
-	if sc, ok := adkToVeadkInvocationMap[internalParentID]; ok {
-		return sc, true
+	res := r.getOrCreateTraceInfos(adkTraceID)
+	r.resourcesMu.Lock()
+	res.veadkTraceID = veadkTraceID
+	r.resourcesMu.Unlock()
+}
+
+// GetVeadkSpanContext finds the veadk replacement for an adk parent span ID.
+func (r *TraceRegistry) GetVeadkSpanContext(adkSpanID trace.SpanID) (trace.SpanContext, bool) {
+	if val, ok := r.adkSpanMap.Load(adkSpanID); ok {
+		return val.(trace.SpanContext), true
 	}
 	return trace.SpanContext{}, false
 }
 
-// getManualParentContextForTool finds the manual parent for a tool span by its OWN ID.
-func getManualParentContextForTool(toolSpanID trace.SpanID) (trace.SpanContext, bool) {
-	registryMutex.RLock()
-	defer registryMutex.RUnlock()
-	sc, ok := toolToVeadkLLMMap[toolSpanID]
-	return sc, ok
-}
-
-// getManualParentContextByToolCallID finds the manual parent for a tool span by its logical ToolCallID.
-func getManualParentContextByToolCallID(toolCallID string) (trace.SpanContext, bool) {
+// GetVeadkParentContextByToolCallID finds the veadk parent for a tool span by its logical ToolCallID.
+func (r *TraceRegistry) GetVeadkParentContextByToolCallID(toolCallID string) (trace.SpanContext, bool) {
 	if toolCallID == "" {
 		return trace.SpanContext{}, false
 	}
-	registryMutex.RLock()
-	defer registryMutex.RUnlock()
-	sc, ok := toolCallToVeadkLLMMap[toolCallID]
-	return sc, ok
-}
-
-// registerTraceMapping records a mapping from an internal TraceID to a manual TraceID.
-func registerTraceMapping(internalTID trace.TraceID, manualTID trace.TraceID) {
-	if !internalTID.IsValid() || !manualTID.IsValid() {
-		return
-	}
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	adkTraceToVeadkTraceMap[internalTID] = manualTID
-}
-
-// getManualTraceID finds the manual TraceID for an internal TraceID.
-func getManualTraceID(internalTID trace.TraceID) (trace.TraceID, bool) {
-	registryMutex.RLock()
-	defer registryMutex.RUnlock()
-	tid, ok := adkTraceToVeadkTraceMap[internalTID]
-	return tid, ok
-}
-
-// unregisterAllForTrace cleans up all mappings related to an internal TraceID.
-func unregisterAllForTrace(internalTID trace.TraceID) {
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	delete(adkTraceToVeadkTraceMap, internalTID)
-}
-
-// endAllInvocationSpans ends all currently active invocation spans.
-func endAllInvocationSpans() {
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-	for id, span := range activeInvocationSpans {
-		if span.IsRecording() {
-			span.End()
+	if val, ok := r.toolCallMap.Load(toolCallID); ok {
+		info := val.(*toolCallInfo)
+		info.mu.RLock()
+		defer info.mu.RUnlock()
+		if info.parentSC.IsValid() {
+			return info.parentSC, true
 		}
-		delete(activeInvocationSpans, id)
 	}
+	return trace.SpanContext{}, false
+}
+
+// GetToolInput retrieves the input arguments for a tool call.
+func (r *TraceRegistry) GetToolInput(toolCallID string) (string, bool) {
+	if val, ok := r.toolCallMap.Load(toolCallID); ok {
+		info := val.(*toolCallInfo)
+		info.mu.RLock()
+		defer info.mu.RUnlock()
+		return info.input, info.input != ""
+	}
+	return "", false
+}
+
+// GetToolOutput retrieves the output result for a tool call.
+func (r *TraceRegistry) GetToolOutput(toolCallID string) (string, bool) {
+	if val, ok := r.toolCallMap.Load(toolCallID); ok {
+		info := val.(*toolCallInfo)
+		info.mu.RLock()
+		defer info.mu.RUnlock()
+		return info.output, info.output != ""
+	}
+	return "", false
+}
+
+// GetVeadkTraceID finds the veadk TraceID for an internal TraceID.
+func (r *TraceRegistry) GetVeadkTraceID(adkTraceID trace.TraceID) (trace.TraceID, bool) {
+	r.resourcesMu.RLock()
+	defer r.resourcesMu.RUnlock()
+
+	if res, ok := r.adkTraceToVeadkTraceMap[adkTraceID]; ok {
+		return res.veadkTraceID, res.veadkTraceID.IsValid()
+	}
+	return trace.TraceID{}, false
+}
+
+// UnregisterRunMapping removes run-related mappings.
+func (r *TraceRegistry) UnregisterRunMapping(adkSpanID trace.SpanID, veadkSpanID trace.SpanID) {
+	r.adkSpanMap.Delete(adkSpanID)
+	r.activeInvocationSpans.Delete(veadkSpanID)
+}
+
+// ScheduleCleanup schedules cleanup of all mappings related to an internal TraceID.
+// This is typically called when the trace is considered complete.
+func (r *TraceRegistry) ScheduleCleanup(adkTraceID trace.TraceID, internalRunID trace.SpanID, veadkSpanID trace.SpanID) {
+	time.AfterFunc(10*time.Minute, func() {
+		r.UnregisterRunMapping(internalRunID, veadkSpanID)
+
+		r.resourcesMu.Lock()
+		defer r.resourcesMu.Unlock()
+
+		if res, ok := r.adkTraceToVeadkTraceMap[adkTraceID]; ok {
+			// Clean up all spans (merged map makes this simpler)
+			for _, sid := range res.spanIDs {
+				r.adkSpanMap.Delete(sid)
+			}
+			// Clean up tool calls
+			for _, tcid := range res.toolCallIDs {
+				r.toolCallMap.Delete(tcid)
+			}
+			// Clean up trace map
+			delete(r.adkTraceToVeadkTraceMap, adkTraceID)
+		}
+	})
+}
+
+// EndAllInvocationSpans ends all currently active invocation spans.
+func (r *TraceRegistry) EndAllInvocationSpans() {
+	r.activeInvocationSpans.Range(func(key, value any) bool {
+		if span, ok := value.(trace.Span); ok {
+			if span.IsRecording() {
+				span.End()
+			}
+		}
+		r.activeInvocationSpans.Delete(key)
+		return true
+	})
 }

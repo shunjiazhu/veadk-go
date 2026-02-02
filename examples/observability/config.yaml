@@ -1,5 +1,3 @@
-LOGGING:
-  level: "debug"
 observability:
   opentelemetry:
     enable_metrics: true

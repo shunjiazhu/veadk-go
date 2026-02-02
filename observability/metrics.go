@@ -57,11 +57,12 @@ var (
 	globalMeterProvider *sdkmetric.MeterProvider
 
 	// Standard Gen AI Metrics
-	tokenUsageHistograms                  []metric.Float64Histogram
-	operationDurationHistograms           []metric.Float64Histogram
+	tokenUsageHistograms        []metric.Float64Histogram
+	operationDurationHistograms []metric.Float64Histogram
+	chatCountCounters           []metric.Int64Counter
+	exceptionsCounters          []metric.Int64Counter
+	// streaming metrics
 	streamingTimeToFirstTokenHistograms   []metric.Float64Histogram
-	chatCountCounters                     []metric.Int64Counter
-	exceptionsCounters                    []metric.Int64Counter
 	streamingTimeToGenerateHistograms     []metric.Float64Histogram
 	streamingTimePerOutputTokenHistograms []metric.Float64Histogram
 
@@ -219,14 +220,6 @@ func RecordTokenUsage(ctx context.Context, input, output int64, attrs ...attribu
 func RecordOperationDuration(ctx context.Context, durationSeconds float64, attrs ...attribute.KeyValue) {
 	for _, histogram := range operationDurationHistograms {
 		histogram.Record(ctx, durationSeconds, metric.WithAttributes(attrs...))
-	}
-}
-
-// RecordFirstTokenLatency records the latency to the first token.
-// This function is maintained for backward compatibility
-func RecordFirstTokenLatency(ctx context.Context, latencySeconds float64, attrs ...attribute.KeyValue) {
-	for _, histogram := range streamingTimeToFirstTokenHistograms {
-		histogram.Record(ctx, latencySeconds, metric.WithAttributes(attrs...))
 	}
 }
 

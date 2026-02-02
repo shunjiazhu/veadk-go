@@ -70,7 +70,7 @@ func Shutdown(ctx context.Context) error {
 
 	// 0. End all active root invocation spans to ensure they are recorded and flushed.
 	// This handles cases like Ctrl+C or premature exit where defer blocks might not run.
-	endAllInvocationSpans()
+	GetRegistry().EndAllInvocationSpans()
 
 	// 1. Shutdown TracerProvider
 	tp := otel.GetTracerProvider()
@@ -124,7 +124,7 @@ func initWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error
 }
 
 func newVeadkExporter(exp sdktrace.SpanExporter) sdktrace.SpanExporter {
-	return &ADKTranslatedExporter{SpanExporter: exp}
+	return &VeADKTranslatedExporter{SpanExporter: exp}
 }
 
 // AddSpanExporter registers an exporter to Google ADK's local telemetry.
@@ -142,7 +142,7 @@ func AddGlobalSpanExporter(exp sdktrace.SpanExporter) {
 
 // setGlobalTracerProvider configures the global OpenTelemetry TracerProvider.
 func setGlobalTracerProvider(exp sdktrace.SpanExporter, spanProcessors ...sdktrace.SpanProcessor) {
-	// Always wrap with ADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
+	// Always wrap with VeADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
 	translatedExp := newVeadkExporter(exp)
 
 	// Default processors
