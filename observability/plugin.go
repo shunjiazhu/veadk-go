@@ -124,7 +124,11 @@ func (p *adkObservabilityPlugin) BeforeRun(ctx agent.InvocationContext) (*genai.
 	// Capture input from UserContent
 	if userContent := ctx.UserContent(); userContent != nil {
 		if jsonIn, err := json.Marshal(userContent); err == nil {
-			span.SetAttributes(attribute.String(AttrInputValue, string(jsonIn)))
+			val := string(jsonIn)
+			span.SetAttributes(
+				attribute.String(AttrInputValue, val),
+				attribute.String(AttrGenAIInput, val),
+			)
 		}
 	}
 
@@ -142,7 +146,11 @@ func (p *adkObservabilityPlugin) AfterRun(ctx agent.InvocationContext) {
 			// Capture final output if available
 			if cached, _ := ctx.Session().State().Get(stateKeyStreamingOutput); cached != nil {
 				if jsonOut, err := json.Marshal(cached); err == nil {
-					span.SetAttributes(attribute.String(AttrOutputValue, string(jsonOut)))
+					val := string(jsonOut)
+					span.SetAttributes(
+						attribute.String(AttrOutputValue, val),
+						attribute.String(AttrGenAIOutput, val),
+					)
 				}
 			}
 			// Capture accumulated token usage for the root invocation span
@@ -178,8 +186,8 @@ func (p *adkObservabilityPlugin) AfterRun(ctx agent.InvocationContext) {
 			if adkSpan.SpanContext().IsValid() {
 				id := adkSpan.SpanContext().SpanID()
 				tid := adkSpan.SpanContext().TraceID()
-				manualID := span.SpanContext().SpanID()
-				GetRegistry().ScheduleCleanup(tid, id, manualID)
+				veadkTraceID := span.SpanContext().SpanID()
+				GetRegistry().ScheduleCleanup(tid, id, veadkTraceID)
 			}
 
 			span.End()
@@ -207,7 +215,7 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 	_ = ctx.State().Set(stateKeyStreamingSpan, span)
 
 	adkSpan := trace.SpanFromContext(context.Context(ctx))
-	if adkSpan.SpanContext().IsValid() { // Register google's ADK span (currently not implemented) -> our manual span context.
+	if adkSpan.SpanContext().IsValid() { // Register google's ADK span (currently not implemented) -> our veadk span context.
 		GetRegistry().RegisterLLMMapping(adkSpan.SpanContext().SpanID(), adkSpan.SpanContext().TraceID(), span.SpanContext())
 	}
 
@@ -222,7 +230,7 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 
 	// Link back to the ADK internal span if it's there.
 	// This records the ID of the span started by the ADK framework, which we
-	// often bypass to maintain a cleaner hierarchy in our manual spans.
+	// often bypass to maintain a cleaner hierarchy in our veadk spans.
 	adkSpan = trace.SpanFromContext(context.Context(ctx))
 	if adkSpan.SpanContext().IsValid() {
 		span.SetAttributes(attribute.String("adk.internal_span_id", adkSpan.SpanContext().SpanID().String()))
@@ -237,6 +245,15 @@ func (p *adkObservabilityPlugin) BeforeModel(ctx agent.CallbackContext, req *mod
 		attribute.String(AttrGenAIRequestModel, req.Model),
 		attribute.String(AttrGenAIRequestType, "chat"), // Default to chat
 		attribute.String(AttrGenAISystem, GetModelProvider(context.Context(ctx))),
+	}
+
+	// Try to detect streaming from config (best effort)
+	if req.Config != nil {
+		// Assuming generic mechanism or specific field.
+		// If Model is OpenAI, we know how to check stream options, but here we only have generic config.
+		// Use a safe check if possible, or skip.
+		// Note: Python explicitly sets "gen_ai.is_streaming" if available.
+		// We'll leave it for now as it's optional and we handle stream metrics via AfterModel logic.
 	}
 
 	if req.Config != nil {
@@ -330,7 +347,7 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 				attribute.String("gen_ai_response_model", meta.ModelName),
 				attribute.String("gen_ai_operation_name", "chat"),
 				attribute.String("gen_ai_operation_type", "llm"),
-				attribute.String("error.type", "error"), // Simple error type
+				attribute.String("error_type", "error"), // Simple error type
 			}
 			RecordExceptions(context.Context(ctx), 1, metricAttrs...)
 		}
@@ -840,25 +857,31 @@ func (p *adkObservabilityPlugin) flattenCompletion(content *genai.Content) []att
 }
 
 func (p *adkObservabilityPlugin) BeforeTool(ctx tool.Context, tool tool.Tool, args map[string]any) (map[string]any, error) {
-	// 1. Capture input arguments
-	// Since we cannot reliably get the Span from context in BeforeTool (it might not be created or propagated yet),
-	// we store the input args in the Registry using ToolCallID. The Exporter will pick this up later.
-	toolCallID := ctx.FunctionCallID()
-	if toolCallID != "" {
-		if argsJSON, err := json.Marshal(args); err == nil {
-			GetRegistry().RegisterToolInput(toolCallID, string(argsJSON))
-		}
-	}
-
 	// Set Standard Attributes if Span is somehow available (best effort)
 	// We still try this in case ADK behavior changes or for some tool types it works.
 	span := trace.SpanFromContext(context.Context(ctx))
-	log.Debug("BeforeTool: get a span from context", "toolCallID", toolCallID, "span", span)
+	toolCallID := ctx.FunctionCallID()
+	log.Debug("BeforeTool: get a span from context", "toolCallID", toolCallID, "span", span.SpanContext())
 
 	if span.SpanContext().IsValid() {
 		activeCtx := context.Context(ctx)
 		setCommonAttributes(activeCtx, span)
 		setToolAttributes(span, tool.Name())
+
+		// Set Tool Input attributes directly
+		inputData := map[string]any{
+			"name":        tool.Name(),
+			"description": tool.Description(),
+			"parameters":  args,
+		}
+		if jsonBytes, err := json.Marshal(inputData); err == nil {
+			val := string(jsonBytes)
+			span.SetAttributes(
+				attribute.String(AttrGenAIToolInput, val),
+				attribute.String(AttrGenAIInput, val),
+				attribute.String(AttrCozeloopInput, val),
+			)
+		}
 	}
 
 	meta := p.getSpanMetadata(ctx.State())
@@ -869,19 +892,27 @@ func (p *adkObservabilityPlugin) BeforeTool(ctx tool.Context, tool tool.Tool, ar
 
 // AfterTool is called after a tool is executed.
 func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
-	// 1. Capture output result
-	toolCallID := ctx.FunctionCallID()
-	if toolCallID != "" {
-		if resultJSON, err := json.Marshal(result); err == nil {
-			GetRegistry().RegisterToolOutput(toolCallID, string(resultJSON))
-		}
-	}
-
 	span := trace.SpanFromContext(context.Context(ctx))
-	log.Debug("AfterTool: get a span from context", "toolCallID", toolCallID, "span", span, "isRecording", span.IsRecording())
+	toolCallID := ctx.FunctionCallID()
+	log.Debug("AfterTool: get a span from context", "toolCallID", toolCallID, "span", span.SpanContext(), "isRecording", span.IsRecording())
 	if span.IsRecording() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
+		}
+
+		// Set Tool Output attributes directly
+		outputData := map[string]any{
+			"id":       toolCallID,
+			"name":     tool.Name(),
+			"response": result,
+		}
+		if jsonBytes, err := json.Marshal(outputData); err == nil {
+			val := string(jsonBytes)
+			span.SetAttributes(
+				attribute.String(AttrGenAIToolOutput, val),
+				attribute.String(AttrGenAIOutput, val),
+				attribute.String(AttrCozeloopOutput, val),
+			)
 		}
 	}
 
@@ -937,7 +968,7 @@ func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.
 	spanName := SpanInvokeAgent + " " + agentName
 	newCtx, span := p.tracer.Start(parentCtx, spanName)
 
-	// [Precision Mapping] Register internal ADK agent span ID -> our manual agent span context.
+	// Register internal ADK's agent span ID -> our veadk agent span context.
 	adkSpan := trace.SpanFromContext(context.Context(ctx))
 	if adkSpan.SpanContext().IsValid() {
 		GetRegistry().RegisterAgentMapping(adkSpan.SpanContext().SpanID(), adkSpan.SpanContext().TraceID(), span.SpanContext())
@@ -952,6 +983,16 @@ func (p *adkObservabilityPlugin) BeforeAgent(ctx agent.CallbackContext) (*genai.
 	setWorkflowAttributes(span)
 	setAgentAttributes(span, agentName)
 
+	// Capture input if available (propagated from BeforeRun via state or context?)
+	// Note: BeforeRun captures UserContent, but for nested agents, input might be passed differently.
+	// For now, if UserContent is available in this context, log it.
+	if userContent := ctx.UserContent(); userContent != nil {
+		if jsonIn, err := json.Marshal(userContent); err == nil {
+			val := string(jsonIn)
+			span.SetAttributes(attribute.String(AttrGenAIInput, val))
+		}
+	}
+
 	return nil, nil
 }
 
@@ -961,6 +1002,13 @@ func (p *adkObservabilityPlugin) AfterAgent(ctx agent.CallbackContext) (*genai.C
 	if s, _ := ctx.State().Get(stateKeyInvokeAgentSpan); s != nil {
 		span := s.(trace.Span)
 		if span.IsRecording() {
+			// Try to capture output if available in state (propagated from AfterRun or internal execution)
+			if cached, _ := ctx.State().Get(stateKeyStreamingOutput); cached != nil {
+				if jsonOut, err := json.Marshal(cached); err == nil {
+					val := string(jsonOut)
+					span.SetAttributes(attribute.String(AttrGenAIOutput, val))
+				}
+			}
 			span.End()
 		}
 	}

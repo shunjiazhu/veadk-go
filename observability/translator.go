@@ -16,6 +16,7 @@ package observability
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/volcengine/veadk-go/log"
@@ -114,36 +115,27 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 	attrs := p.ReadOnlySpan.Attributes()
 	newAttrs := make([]attribute.KeyValue, 0, len(attrs)+5) // Pre-allocate with some extra space
 
-	// Create a map to track existing standard keys to avoid duplicates/overwrites
+	// Track existing keys and tool-related fields
 	existingKeys := make(map[string]bool)
-	toolCallID := ""
+	var toolName, toolDesc, toolArgs, toolCallID, toolResponse string
 
-	// First pass: scan for existing keys and ToolCallID
+	// First pass: scan for existing keys and raw data
 	for _, kv := range attrs {
 		existingKeys[string(kv.Key)] = true
-		if kv.Key == attribute.Key(AttrGenAIToolCallID) {
-			toolCallID = kv.Value.AsString()
-		}
-	}
+		key := string(kv.Key)
 
-	// Dynamic Injection: Tool Input/Output from Registry
-	if toolCallID != "" {
-		registry := GetRegistry()
-		// Inject Input
-		if input, ok := registry.GetToolInput(toolCallID); ok {
-			newAttrs = append(newAttrs,
-				attribute.String(AttrGenAIToolInput, input),
-				attribute.String(AttrCozeloopInput, input),
-				attribute.String(AttrGenAIInput, input),
-			)
-		}
-		// Inject Output
-		if output, ok := registry.GetToolOutput(toolCallID); ok {
-			newAttrs = append(newAttrs,
-				attribute.String(AttrGenAIToolOutput, output),
-				attribute.String(AttrCozeloopOutput, output),
-				attribute.String(AttrGenAIOutput, output),
-			)
+		// Collect raw data for reconstruction
+		switch key {
+		case AttrGenAIToolName:
+			toolName = kv.Value.AsString()
+		case AttrGenAIToolDescription: // Note: ADK uses gen_ai.tool.description
+			toolDesc = kv.Value.AsString()
+		case gcpVertexAgentToolCallArgsName:
+			toolArgs = kv.Value.AsString()
+		case AttrGenAIToolCallID:
+			toolCallID = kv.Value.AsString()
+		case gcpVertexAgentToolResponseName:
+			toolResponse = kv.Value.AsString()
 		}
 	}
 
@@ -154,6 +146,11 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 		if strings.HasPrefix(key, "gcp.vertex.agent.") {
 			targetKey, ok := ADKAttributeKeyMap[key]
 			if ok {
+				// Skip if we are going to reconstruct this field
+				if targetKey == AttrGenAIToolInput || targetKey == AttrGenAIToolOutput {
+					continue
+				}
+
 				// Only add mapped key if the target key doesn't already exist in the span
 				if !existingKeys[targetKey] {
 					newAttrs = append(newAttrs, attribute.KeyValue{Key: attribute.Key(targetKey), Value: kv.Value})
@@ -168,6 +165,48 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 		}
 
 		newAttrs = append(newAttrs, kv)
+	}
+
+	// Dynamic Reconstruction: Tool Input/Output from raw attributes
+	if toolArgs != "" && toolName != "" {
+		// Reconstruct Input
+		var paramsMap map[string]any
+		if err := json.Unmarshal([]byte(toolArgs), &paramsMap); err == nil {
+			inputData := map[string]any{
+				"name":        toolName,
+				"description": toolDesc,
+				"parameters":  paramsMap,
+			}
+			if inputJSON, err := json.Marshal(inputData); err == nil {
+				val := string(inputJSON)
+				newAttrs = append(newAttrs,
+					attribute.String(AttrGenAIToolInput, val),
+					attribute.String(AttrCozeloopInput, val),
+					attribute.String(AttrGenAIInput, val),
+				)
+			}
+		}
+	}
+
+	if toolResponse != "" && toolCallID != "" {
+		// Reconstruct Output
+		var responseMap map[string]any
+		// ADK serializes response as map, unmarshal it first
+		if err := json.Unmarshal([]byte(toolResponse), &responseMap); err == nil {
+			outputData := map[string]any{
+				"id":       toolCallID,
+				"name":     toolName,
+				"response": responseMap,
+			}
+			if outputJSON, err := json.Marshal(outputData); err == nil {
+				val := string(outputJSON)
+				newAttrs = append(newAttrs,
+					attribute.String(AttrGenAIToolOutput, val),
+					attribute.String(AttrCozeloopOutput, val),
+					attribute.String(AttrGenAIOutput, val),
+				)
+			}
+		}
 	}
 
 	return newAttrs

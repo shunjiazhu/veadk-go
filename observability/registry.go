@@ -42,8 +42,6 @@ type TraceRegistry struct {
 type toolCallInfo struct {
 	mu       sync.RWMutex
 	parentSC trace.SpanContext
-	input    string
-	output   string
 }
 
 type traceInfos struct {
@@ -157,28 +155,6 @@ func (r *TraceRegistry) RegisterToolCallMapping(toolCallID string, adkTraceID tr
 	}
 }
 
-// RegisterToolInput stores the input arguments for a tool call.
-func (r *TraceRegistry) RegisterToolInput(toolCallID string, input string) {
-	if toolCallID == "" {
-		return
-	}
-	info := r.getOrCreateToolCallInfo(toolCallID)
-	info.mu.Lock()
-	info.input = input
-	info.mu.Unlock()
-}
-
-// RegisterToolOutput stores the output result for a tool call.
-func (r *TraceRegistry) RegisterToolOutput(toolCallID string, output string) {
-	if toolCallID == "" {
-		return
-	}
-	info := r.getOrCreateToolCallInfo(toolCallID)
-	info.mu.Lock()
-	info.output = output
-	info.mu.Unlock()
-}
-
 // RegisterTraceMapping records a mapping from an internal adk TraceID to a veadk TraceID.
 func (r *TraceRegistry) RegisterTraceMapping(adkTraceID trace.TraceID, veadkTraceID trace.TraceID) {
 	if !adkTraceID.IsValid() || !veadkTraceID.IsValid() {
@@ -214,28 +190,6 @@ func (r *TraceRegistry) GetVeadkParentContextByToolCallID(toolCallID string) (tr
 	return trace.SpanContext{}, false
 }
 
-// GetToolInput retrieves the input arguments for a tool call.
-func (r *TraceRegistry) GetToolInput(toolCallID string) (string, bool) {
-	if val, ok := r.toolCallMap.Load(toolCallID); ok {
-		info := val.(*toolCallInfo)
-		info.mu.RLock()
-		defer info.mu.RUnlock()
-		return info.input, info.input != ""
-	}
-	return "", false
-}
-
-// GetToolOutput retrieves the output result for a tool call.
-func (r *TraceRegistry) GetToolOutput(toolCallID string) (string, bool) {
-	if val, ok := r.toolCallMap.Load(toolCallID); ok {
-		info := val.(*toolCallInfo)
-		info.mu.RLock()
-		defer info.mu.RUnlock()
-		return info.output, info.output != ""
-	}
-	return "", false
-}
-
 // GetVeadkTraceID finds the veadk TraceID for an internal TraceID.
 func (r *TraceRegistry) GetVeadkTraceID(adkTraceID trace.TraceID) (trace.TraceID, bool) {
 	r.resourcesMu.RLock()
@@ -256,7 +210,7 @@ func (r *TraceRegistry) UnregisterRunMapping(adkSpanID trace.SpanID, veadkSpanID
 // ScheduleCleanup schedules cleanup of all mappings related to an internal TraceID.
 // This is typically called when the trace is considered complete.
 func (r *TraceRegistry) ScheduleCleanup(adkTraceID trace.TraceID, internalRunID trace.SpanID, veadkSpanID trace.SpanID) {
-	time.AfterFunc(10*time.Minute, func() {
+	time.AfterFunc(5*time.Minute, func() {
 		r.UnregisterRunMapping(internalRunID, veadkSpanID)
 
 		r.resourcesMu.Lock()

@@ -207,11 +207,11 @@ func RecordTokenUsage(ctx context.Context, input, output int64, attrs ...attribu
 	for _, histogram := range tokenUsageHistograms {
 		if input > 0 {
 			histogram.Record(ctx, float64(input), metric.WithAttributes(
-				append(attrs, attribute.String("gen_ai_token_type", "input"))...))
+				append(attrs, attribute.String(AttrGenAITokenType, "input"))...))
 		}
 		if output > 0 {
 			histogram.Record(ctx, float64(output), metric.WithAttributes(
-				append(attrs, attribute.String("gen_ai_token_type", "output"))...))
+				append(attrs, attribute.String(AttrGenAITokenType, "output"))...))
 		}
 	}
 }

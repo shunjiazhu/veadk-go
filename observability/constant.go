@@ -86,6 +86,7 @@ const (
 	AttrSessionId          = "session.id"    // Alias of gen_ai.session.id for CozeLoop/TLS platforms
 	AttrInvocationId       = "invocation.id" // Alias of gen_ai.invocation.id for CozeLoop platform
 
+	AttrErrorType          = "error.type"
 	AttrCozeloopReportSource = "cozeloop.report.source" // Fixed value: veadk
 	AttrCozeloopCallType     = "cozeloop.call_type"     // CozeLoop call type
 
@@ -138,6 +139,7 @@ const (
 	AttrGenAIChoice                        = "gen_ai.choice"
 	AttrGenAIResponsePromptTokenCount      = "gen_ai.response.prompt_token_count"
 	AttrGenAIResponseCandidatesTokenCount  = "gen_ai.response.candidates_token_count"
+	AttrGenAITokenType                     = "gen_ai_token_type" // Metric specific: underscore
 
 	AttrInputValue  = "input.value"
 	AttrOutputValue = "output.value"
@@ -152,7 +154,9 @@ const (
 // Tool attributes
 const (
 	AttrGenAIOperationName = "gen_ai.operation.name"
+	AttrGenAIOperationType = "gen_ai.operation.type"
 	AttrGenAIToolName      = "gen_ai.tool.name"
+	AttrGenAIToolDescription = "gen_ai.tool.description"
 	AttrGenAIToolInput     = "gen_ai.tool.input"
 	AttrGenAIToolOutput    = "gen_ai.tool.output"
 	AttrGenAISpanKind      = "gen_ai.span.kind"
