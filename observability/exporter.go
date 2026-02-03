@@ -236,7 +236,7 @@ func NewMultiExporter(ctx context.Context, cfg *configs.OpenTelemetryConfig) (tr
 
 	if len(exporters) == 0 {
 		log.Info("No exporters to export observability data")
-		return nil, nil
+		return nil, ErrNoExporters
 	}
 
 	if len(exporters) == 1 {

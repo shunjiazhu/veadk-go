@@ -202,10 +202,7 @@ func (r *TraceRegistry) RegisterToolMapping(toolSpanID trace.SpanID, veadkParent
 }
 
 func (r *TraceRegistry) getOrCreateToolCallInfo(toolCallID string) *toolCallInfo {
-	val, loaded := r.toolCallMap.LoadOrStore(toolCallID, &toolCallInfo{})
-	if !loaded {
-		// New entry
-	}
+	val, _ := r.toolCallMap.LoadOrStore(toolCallID, &toolCallInfo{})
 	return val.(*toolCallInfo)
 }
 

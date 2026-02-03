@@ -27,11 +27,8 @@ import (
 )
 
 var (
-	spanInvokeAgent = "invoke_agent"
-
 	gcpVertexAgentLLMRequestName   = "gcp.vertex.agent.llm_request"
 	gcpVertexAgentToolCallArgsName = "gcp.vertex.agent.tool_call_args"
-	gcpVertexAgentEventID          = "gcp.vertex.agent.event_id"
 	gcpVertexAgentToolResponseName = "gcp.vertex.agent.tool_response"
 	gcpVertexAgentLLMResponseName  = "gcp.vertex.agent.llm_response"
 	gcpVertexAgentInvocationID     = "gcp.vertex.agent.invocation_id"
@@ -115,7 +112,6 @@ type translatedSpan struct {
 
 func (p *translatedSpan) Attributes() []attribute.KeyValue {
 	attrs := p.ReadOnlySpan.Attributes()
-	newAttrs := make([]attribute.KeyValue, 0, len(attrs)+5) // Pre-allocate with some extra space
 
 	// Track existing keys and tool-related fields
 	existingKeys := make(map[string]bool)
@@ -141,7 +137,7 @@ func (p *translatedSpan) Attributes() []attribute.KeyValue {
 		}
 	}
 
-	newAttrs = p.processAttributes(attrs, existingKeys)
+	newAttrs := p.processAttributes(attrs, existingKeys)
 
 	// Dynamic Reconstruction: Tool Input/Output from raw attributes
 	if toolArgs != "" && toolName != "" {
