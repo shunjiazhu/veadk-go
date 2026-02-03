@@ -84,17 +84,19 @@ func TestSetGlobalTracerProvider(t *testing.T) {
 }
 
 func TestInitializeWithConfig(t *testing.T) {
-	// Nil config should be fine
+	// Nil config should return ErrNoExporters
 	err := initWithConfig(context.Background(), nil)
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, ErrNoExporters)
 
-	// Config with disabled global provider but valid exporter
+	// Config with disabled global provider but valid exporter, should return ErrNoExporters
+	// because neither local nor global provider is enabled.
 	cfg := &configs.OpenTelemetryConfig{
 		EnableGlobalProvider: false,
+		EnableLocalProvider:  false,
 		Stdout:               &configs.StdoutConfig{Enable: true},
 	}
 	err = initWithConfig(context.Background(), cfg)
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, ErrNoExporters)
 
 	// Config with global provider enabled and stdout
 	cfgGlobal := &configs.OpenTelemetryConfig{

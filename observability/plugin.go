@@ -50,7 +50,7 @@ func NewPlugin(opts ...Option) *plugin.Plugin {
 	}
 
 	if err := Init(context.Background(), observabilityConfig); err != nil {
-		log.Error("Init observability exporter and processor failed", "error", err)
+		log.Error("Init observability exporter and processor failed, return noop plugin", "error", err)
 		return noOpPlugin(PluginName)
 	}
 
@@ -97,8 +97,7 @@ func WithEnableMetrics(enable bool) Option {
 type adkObservabilityPlugin struct {
 	config *configs.ObservabilityConfig
 
-	enabled bool
-	tracer  trace.Tracer // global tracer
+	tracer trace.Tracer // global tracer
 }
 
 func (p *adkObservabilityPlugin) isMetricsEnabled() bool {

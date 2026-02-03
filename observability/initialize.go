@@ -49,8 +49,8 @@ func Init(ctx context.Context, cfg *configs.ObservabilityConfig) error {
 			otelCfg = cfg.OpenTelemetry
 		}
 
-		if otelCfg == nil || !hasEnabledExporters(otelCfg) {
-			log.Info("No observability config found or no exporters enabled, observability data will not be exported")
+		if otelCfg == nil {
+			log.Info("No observability config found, observability data will not be exported")
 			initErr = ErrNoExporters
 			return
 		}
@@ -63,28 +63,6 @@ func Init(ctx context.Context, cfg *configs.ObservabilityConfig) error {
 		}
 	})
 	return initErr
-}
-
-func hasEnabledExporters(cfg *configs.OpenTelemetryConfig) bool {
-	if cfg == nil {
-		return false
-	}
-	if cfg.Stdout != nil && cfg.Stdout.Enable {
-		return true
-	}
-	if cfg.File != nil && cfg.File.Path != "" {
-		return true
-	}
-	if cfg.ApmPlus != nil {
-		return true
-	}
-	if cfg.CozeLoop != nil {
-		return true
-	}
-	if cfg.TLS != nil {
-		return true
-	}
-	return false
 }
 
 // Shutdown shuts down the observability system, flushing all spans and metrics.
@@ -134,33 +112,47 @@ func Shutdown(ctx context.Context) error {
 // It creates the appropriate exporter and calls RegisterExporter.
 func initWithConfig(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
 	var errs []error
-	err := initializeTraceProvider(ctx, cfg)
+	traceInitialized, err := initializeTraceProvider(ctx, cfg)
 	if err != nil {
 		errs = append(errs, err)
 	}
 
-	err = initializeMeterProvider(ctx, cfg)
+	metricsInitialized, err := initializeMeterProvider(ctx, cfg)
 	if err != nil {
 		errs = append(errs, err)
+	}
+
+	if !traceInitialized && !metricsInitialized {
+		log.Info("No observability exporters are configured, observability data will not be exported")
+		return ErrNoExporters
 	}
 
 	return errors.Join(errs...)
 }
 
 func newVeadkExporter(exp sdktrace.SpanExporter) sdktrace.SpanExporter {
+	if exp == nil {
+		return nil
+	}
 	return &VeADKTranslatedExporter{SpanExporter: exp}
 }
 
 // AddSpanExporter registers an exporter to Google ADK's local telemetry.
 func AddSpanExporter(exp sdktrace.SpanExporter) {
-	telemetry.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(newVeadkExporter(exp)))
+	veExp := newVeadkExporter(exp)
+	if veExp != nil {
+		telemetry.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(veExp))
+	}
 }
 
 // AddGlobalSpanExporter registers an exporter toglobal TracerProvider.
 func AddGlobalSpanExporter(exp sdktrace.SpanExporter) {
-	globalTP := otel.GetTracerProvider()
-	if sdkTP, ok := globalTP.(*sdktrace.TracerProvider); ok {
-		sdkTP.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(newVeadkExporter(exp)))
+	veExp := newVeadkExporter(exp)
+	if veExp != nil {
+		globalTP := otel.GetTracerProvider()
+		if sdkTP, ok := globalTP.(*sdktrace.TracerProvider); ok {
+			sdkTP.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(veExp))
+		}
 	}
 }
 
@@ -168,6 +160,9 @@ func AddGlobalSpanExporter(exp sdktrace.SpanExporter) {
 func setGlobalTracerProvider(exp sdktrace.SpanExporter, spanProcessors ...sdktrace.SpanProcessor) {
 	// Always wrap with VeADKTranslatedExporter to ensure ADK-internal spans are correctly mapped
 	translatedExp := newVeadkExporter(exp)
+	if translatedExp == nil {
+		return
+	}
 
 	// Default processors
 	allProcessors := append([]sdktrace.SpanProcessor{}, spanProcessors...)
@@ -200,57 +195,69 @@ func setGlobalTracerProvider(exp sdktrace.SpanExporter, spanProcessors ...sdktra
 	otel.SetTracerProvider(tp)
 }
 
-func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+func setupLocalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) (bool, error) {
 	if cfg == nil {
-		return nil
+		return false, nil
 	}
 
 	exp, err := NewMultiExporter(ctx, cfg)
 	if err != nil {
-		return err
+		return false, err
+	}
+
+	if exp == nil {
+		return false, nil
 	}
 
 	AddSpanExporter(exp)
-	return nil
+	return true, nil
 }
 
-func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
-	log.Info("Registering ADK Global TracerProvider")
-
+func setupGlobalTracer(ctx context.Context, cfg *configs.OpenTelemetryConfig) (bool, error) {
 	globalExp, err := NewMultiExporter(ctx, cfg)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if globalExp != nil {
+		log.Info("Registering ADK Global TracerProvider")
 		setGlobalTracerProvider(globalExp)
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
-func initializeTraceProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+func initializeTraceProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) (bool, error) {
 	var errs []error
+	var initialized bool
 	if cfg != nil && cfg.EnableLocalProvider {
-		err := setupLocalTracer(ctx, cfg)
+		ok, err := setupLocalTracer(ctx, cfg)
 		if err != nil {
 			errs = append(errs, err)
+		}
+		if ok {
+			initialized = true
 		}
 	}
 
 	if cfg != nil && cfg.EnableGlobalProvider {
-		err := setupGlobalTracer(ctx, cfg)
+		ok, err := setupGlobalTracer(ctx, cfg)
 		if err != nil {
 			errs = append(errs, err)
 		}
+		if ok {
+			initialized = true
+		}
 	}
-	return errors.Join(errs...)
+	return initialized, errors.Join(errs...)
 }
 
-func initializeMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) error {
+func initializeMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConfig) (bool, error) {
 	var errs []error
+	var initialized bool
 	if cfg == nil || cfg.EnableMetrics == nil || !*cfg.EnableMetrics {
 		log.Info("Meter provider is not enabled")
-		return nil
+		return false, nil
 	}
 
 	if cfg.EnableLocalProvider {
@@ -258,7 +265,10 @@ func initializeMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConf
 		if err != nil {
 			errs = append(errs, err)
 		}
-		registerLocalMetrics(readers)
+		if len(readers) > 0 {
+			registerLocalMetrics(readers)
+			initialized = true
+		}
 	}
 
 	if cfg.EnableGlobalProvider {
@@ -266,9 +276,12 @@ func initializeMeterProvider(ctx context.Context, cfg *configs.OpenTelemetryConf
 		if err != nil {
 			errs = append(errs, err)
 		}
-		registerGlobalMetrics(globalReaders)
+		if len(globalReaders) > 0 {
+			registerGlobalMetrics(globalReaders)
+			initialized = true
+		}
 	}
-	return errors.Join(errs...)
+	return initialized, errors.Join(errs...)
 }
 
 // handleSignals registers a signal handler to ensure observability data is flushed on exit.
