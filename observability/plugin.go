@@ -195,18 +195,18 @@ func (p *adkObservabilityPlugin) AfterRun(ctx agent.InvocationContext) {
 							attribute.String("gen_ai_operation_type", "workflow"),
 						}
 
-						var lastErr error
-						if val, _ := ctx.Session().State().Get(stateKeyLastError); val != nil {
-							lastErr = val.(error)
+						var errorCode string
+						eventLen := ctx.Session().Events().Len()
+						if eventLen > 0 {
+							lastEvent := ctx.Session().Events().At(eventLen - 1)
+							errorCode = lastEvent.ErrorCode
 						}
-						if lastErr != nil {
-							agentKitsAttrs = append(agentKitsAttrs, attribute.String("error_type", "invocation_error"))
+						if errorCode != "" {
+							agentKitsAttrs = append(agentKitsAttrs, attribute.String("error_type", errorCode))
 						}
 						RecordAgentKitDuration(context.Background(), elapsed, agentKitsAttrs...)
 					}
-
 				}
-
 			}
 
 			// Clean up from global map with delay to allow children to be exported.
@@ -364,7 +364,6 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
-		_ = ctx.State().Set(stateKeyLastError, err)
 		// Record Exceptions metric
 		if p.isMetricsEnabled() {
 			meta := p.getSpanMetadata(ctx.State())
@@ -373,10 +372,9 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 				attribute.String("gen_ai_response_model", meta.ModelName),
 				attribute.String("gen_ai_operation_name", "chat"),
 				attribute.String("gen_ai_operation_type", "llm"),
-				attribute.String("error_type", "llm_error"), // Simple error type
+				attribute.String("error_type", "error"), // Simple error type
 			}
 			RecordExceptions(context.Context(ctx), 1, metricAttrs...)
-			p.recordFinalResponseMetrics(ctx, meta, meta.ModelName, err)
 		}
 		return nil, nil
 	}
@@ -470,7 +468,7 @@ func (p *adkObservabilityPlugin) AfterModel(ctx agent.CallbackContext, resp *mod
 
 	if !resp.Partial {
 		// Record Operation Duration and Latency
-		p.recordFinalResponseMetrics(ctx, meta, finalModelName, nil)
+		p.recordFinalResponseMetrics(ctx, meta, finalModelName)
 	}
 
 	return nil, nil
@@ -583,7 +581,7 @@ func (p *adkObservabilityPlugin) recordStreamingGenerationMetrics(ctx agent.Call
 	}
 }
 
-func (p *adkObservabilityPlugin) recordFinalResponseMetrics(ctx agent.CallbackContext, meta *spanMetadata, finalModelName string, err error) {
+func (p *adkObservabilityPlugin) recordFinalResponseMetrics(ctx agent.CallbackContext, meta *spanMetadata, finalModelName string) {
 	if !meta.StartTime.IsZero() {
 		duration := time.Since(meta.StartTime).Seconds()
 		metricAttrs := []attribute.KeyValue{
@@ -595,17 +593,6 @@ func (p *adkObservabilityPlugin) recordFinalResponseMetrics(ctx agent.CallbackCo
 		if p.isMetricsEnabled() {
 			RecordOperationDuration(context.Context(ctx), duration, metricAttrs...)
 			RecordAPMPlusSpanLatency(context.Context(ctx), duration, metricAttrs...)
-
-			if isAgentKitRuntime {
-				agentKitsAttrs := []attribute.KeyValue{
-					attribute.String("gen_ai_operation_name", "chat"),
-					attribute.String("gen_ai_operation_type", "llm"),
-				}
-				if err != nil {
-					agentKitsAttrs = append(agentKitsAttrs, attribute.String("error_type", "llm_error"))
-				}
-				RecordAgentKitDuration(context.Context(ctx), duration, agentKitsAttrs...)
-			}
 		}
 	}
 }
@@ -932,9 +919,6 @@ func (p *adkObservabilityPlugin) BeforeTool(ctx tool.Context, tool tool.Tool, ar
 
 // AfterTool is called after a tool is executed.
 func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
-	if err != nil {
-		_ = ctx.State().Set(stateKeyLastError, err)
-	}
 	// Metrics recording only
 	meta := p.getSpanMetadata(ctx.State())
 	if !meta.StartTime.IsZero() {
@@ -947,17 +931,6 @@ func (p *adkObservabilityPlugin) AfterTool(ctx tool.Context, tool tool.Tool, arg
 		if p.isMetricsEnabled() {
 			RecordOperationDuration(context.Background(), duration, metricAttrs...)
 			RecordAPMPlusSpanLatency(context.Background(), duration, metricAttrs...)
-
-			if isAgentKitRuntime {
-				agentKitsAttrs := []attribute.KeyValue{
-					attribute.String("gen_ai_operation_name", tool.Name()),
-					attribute.String("gen_ai_operation_type", "tool"),
-				}
-				if err == nil {
-					agentKitsAttrs = append(agentKitsAttrs, attribute.String("error_type", "tool_error"))
-				}
-				RecordAgentKitDuration(context.Background(), duration, agentKitsAttrs...)
-			}
 		}
 
 		if p.isMetricsEnabled() {
@@ -1050,28 +1023,6 @@ func (p *adkObservabilityPlugin) AfterAgent(ctx agent.CallbackContext) (*genai.C
 			span.End()
 		}
 	}
-
-	meta := p.getSpanMetadata(ctx.State())
-	if !meta.StartTime.IsZero() {
-		if p.isMetricsEnabled() {
-			if isAgentKitRuntime {
-				duration := time.Since(meta.StartTime).Seconds()
-				agentKitsAttrs := []attribute.KeyValue{
-					attribute.String("gen_ai_operation_name", "invoke_agent"),
-					attribute.String("gen_ai_operation_type", "agent_server"),
-				}
-				var lastErr error
-				if val, _ := ctx.State().Get(stateKeyLastError); val != nil {
-					lastErr = val.(error)
-				}
-
-				if lastErr != nil {
-					agentKitsAttrs = append(agentKitsAttrs, attribute.String("error_type", "invoke_agent_error"))
-				}
-				RecordAgentKitDuration(context.Background(), duration, agentKitsAttrs...)
-			}
-		}
-	}
 	return nil, nil
 }
 
@@ -1119,7 +1070,6 @@ const (
 	stateKeyMetadata        = "veadk.observability.metadata"
 	stateKeyStreamingOutput = "veadk.observability.streaming_output"
 	stateKeyStreamingSpan   = "veadk.observability.streaming_span"
-	stateKeyLastError       = "veadk.observability.last_error"
 )
 
 // spanMetadata groups various observational data points in a single structure
